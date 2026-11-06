@@ -5,12 +5,14 @@ name: Windows app
 # /download page and the app's auto-updater point at.
 
 on:
+  # Branch pushes that touch the app build it; app-v* tags build and publish a release.
+  # (Two triggers because a push filter with both branches and tags applies `paths` to tags too.)
   push:
+    branches: ["**"]
     paths:
       - "app/**"
       - ".github/workflows/app.yml"
-    tags:
-      - "app-v*"
+  create:
   workflow_dispatch:
 
 concurrency:
@@ -22,6 +24,8 @@ permissions:
 
 jobs:
   windows:
+    # `create` also fires for new branches; only app-v* tags matter here.
+    if: github.event_name != 'create' || startsWith(github.ref, 'refs/tags/app-v')
     runs-on: windows-latest
     defaults:
       run:
