@@ -75,6 +75,12 @@ jobs:
           systemctl is-active caddy livekit streamroom
           grep -q '^turn:' /etc/livekit/livekit.yaml || sudo grep -q '^turn:' /etc/livekit/livekit.yaml
 
+      - name: Detailed relay logging (test only)
+        run: |
+          sudo sed -i 's/^  level: info/  level: info\n  pion_level: debug/' /etc/livekit/livekit.yaml
+          sudo systemctl restart livekit
+          sleep 2
+
       - name: Trust the local test certificate authority in Chromium
         run: |
           sudo apt-get install -y -q libnss3-tools
@@ -111,7 +117,9 @@ jobs:
           echo "== listening"
           sudo ss -ltnup | grep -E ":443|:5349|:3478|:7881|:7882|:8443" || true
           echo "== livekit (turn / ice)"
-          sudo journalctl -u livekit --no-pager | grep -iE "turn|candidate|without connection|ice" | cut -c1-600 | tail -40 || true
+          sudo journalctl -u livekit --no-pager | grep -iE "turn|permission|relay|allocat|channel" | grep -v twirp | cut -c1-500 | sort | uniq -c | sort -rn | head -40 || true
+          echo "== livekit failures"
+          sudo journalctl -u livekit --no-pager | grep -E "without connection" | grep -o '"publisherCandidates".\{0,700\}' | tail -2 || true
           echo "== caddy (layer4 / tls / errors)"
           sudo journalctl -u caddy --no-pager | grep -iE "layer4|error|tls|handshake|proxy" | cut -c1-400 | tail -40 || true
 
