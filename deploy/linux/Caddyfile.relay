@@ -8,7 +8,8 @@
 {
 	__GLOBAL_EXTRA__
 	auto_https disable_redirects
-	servers :8443 {
+	# Must name the exact listener ("127.0.0.1:8443"); ":8443" silently matches nothing.
+	servers 127.0.0.1:8443 {
 		protocols h1 h2
 		listener_wrappers {
 			# Keeps real client addresses (for rate limits and the health panel).
