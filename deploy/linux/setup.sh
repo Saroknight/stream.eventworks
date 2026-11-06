@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Streamroom installer / updater for Arch Linux and Ubuntu/Debian.
 #
-#   sudo bash deploy/linux/setup.sh stream.example.com
+#   sudo bash deploy/linux/setup.sh stream.example.com [public-ipv4]
+#
+# public-ipv4: the server's fixed public IPv4 address, which browsers send video to. Give it
+# whenever you know it (the Lightsail script does). Without it, LiveKit looks it up via STUN at
+# start, which can pick up a stale or wrong address.
 #
 # Run it from the project folder. Safe to re-run: it updates the app code and restarts
 # services, but keeps your existing keys, admin password and rooms.
 set -euo pipefail
 
 DOMAIN="${1:-}"
+PUBLIC_IP="${2:-${PUBLIC_IP:-}}"
 if [[ -z "$DOMAIN" ]]; then
   echo "Usage: sudo $0 your.domain.com" >&2
   exit 1
@@ -93,7 +98,16 @@ chmod 750 /usr/local/bin/streamroom-admin-link
 
 say "Writing LiveKit config"
 mkdir -p /etc/livekit
+if [[ -n "$PUBLIC_IP" ]]; then
+  # Advertise exactly this address for media instead of asking a STUN server.
+  IPLINE="node_ip: $PUBLIC_IP"
+  echo "Media address: $PUBLIC_IP"
+else
+  IPLINE="use_external_ip: true"
+  echo "Media address: looked up via STUN when LiveKit starts"
+fi
 sed -e "s|__API_KEY__|$LIVEKIT_API_KEY|" -e "s|__API_SECRET__|$LIVEKIT_API_SECRET|" \
+  -e "s|^  __PUBLIC_IP_LINE__.*|  $IPLINE|" \
   "$HERE/livekit.yaml" > /etc/livekit/livekit.yaml
 chown root:livekit /etc/livekit/livekit.yaml
 chmod 640 /etc/livekit/livekit.yaml

@@ -133,7 +133,7 @@ say "Installing on the server (takes a few minutes the first time)"
 "${SSH[@]}" "set -e
   cloud-init status --wait >/dev/null 2>&1 || true
   rm -rf ~/streamroom && mkdir ~/streamroom && tar -xzf ~/streamroom.tgz -C ~/streamroom
-  sudo bash ~/streamroom/deploy/linux/setup.sh '$DOMAIN'"
+  sudo bash ~/streamroom/deploy/linux/setup.sh '$DOMAIN' '$IP'"
 
 # ---- 7. check ----
 say "Checking https://$DOMAIN"

@@ -4,7 +4,7 @@ port: 7880                 # signaling (WebSocket); reached through Caddy, keep 
 rtc:
   tcp_port: 7881           # media fallback over TCP  -> open in firewall
   udp_port: 7882           # all UDP media on one port -> open in firewall
-  use_external_ip: true    # advertise the server's public IP to browsers
+  __PUBLIC_IP_LINE__       # setup.sh: "node_ip: <public IPv4>" if known, else "use_external_ip: true"
 room:
   auto_create: false       # rooms are created by the Streamroom server only (ended rooms stay ended)
 keys:
