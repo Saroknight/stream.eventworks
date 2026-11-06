@@ -4380,7 +4380,7 @@ checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
 name = "streamroom-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "streamroom-core",
@@ -4389,7 +4389,7 @@ dependencies = [
 
 [[package]]
 name = "streamroom-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "livekit",
@@ -4405,7 +4405,7 @@ dependencies = [
 
 [[package]]
 name = "streamroom-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "reqwest 0.13.5",
@@ -5738,7 +5738,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "wincap"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "serde",
