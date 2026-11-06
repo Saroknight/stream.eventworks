@@ -185,6 +185,7 @@
           ? chip(v.ms > 1500 ? 'warn' : 'ok', 'Video server', [`Answering in ${v.ms} ms`, `${v.rooms} room${v.rooms === 1 ? '' : 's'} · ${v.people} connected · ${v.live} live`])
           : chip('bad', 'Video server', ['Not answering', v.error || '']),
         chip(hs.media.status === 'skip' ? 'ok' : hs.media.status, 'Video address', [hs.media.text]),
+        chip(hs.relay.status, 'Port 443 fallback', [hs.relay.text]),
         chip(hs.failures24h ? 'warn' : 'ok', 'Connection problems', [hs.failures24h ? `${hs.failures24h} in the last 24 hours (details below)` : 'None in the last 24 hours']),
       );
       const bad = [serverStatus, v.status === 'ok' ? 'ok' : 'bad', hs.media.status].filter((x) => x === 'bad').length;

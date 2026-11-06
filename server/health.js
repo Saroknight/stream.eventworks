@@ -10,6 +10,7 @@ import { liveSummary } from './rooms.js';
 import * as store from './store.js';
 
 const NODE_IP = process.env.LIVEKIT_NODE_IP || '';
+const TURN_DOMAIN = process.env.TURN_DOMAIN || '';
 
 // What each kind means, in words the admin page can show as-is.
 export const KINDS = {
@@ -82,6 +83,18 @@ async function mediaAddressCheck() {
   return { status: 'bad', text: `Viewers are sent to ${NODE_IP}, but ${host} points at ${resolved.join(', ')}. Re-deploy to fix.` };
 }
 
+async function relayCheck() {
+  if (!TURN_DOMAIN) {
+    return { status: 'warn', text: 'Off. Viewers on strict networks (work, school) may not get video. Re-deploy to turn it on.' };
+  }
+  let resolved = [];
+  try { resolved = await dns.resolve4(TURN_DOMAIN); } catch (e) { return { status: 'bad', text: `On, but ${TURN_DOMAIN} doesn't resolve (${e.code || e.message}).` }; }
+  if (NODE_IP && !resolved.includes(NODE_IP)) {
+    return { status: 'bad', text: `On, but ${TURN_DOMAIN} points at ${resolved.join(', ')} instead of ${NODE_IP}.` };
+  }
+  return { status: 'ok', text: `On: blocked networks get video through ${TURN_DOMAIN} on port 443.` };
+}
+
 router.get('/admin/health', requireUser, requireAdmin, async (_req, res, next) => {
   try {
     const t = Date.now();
@@ -102,6 +115,7 @@ router.get('/admin/health', requireUser, requireAdmin, async (_req, res, next) =
       },
       video,
       media: await mediaAddressCheck(),
+      relay: await relayCheck(),
       events: evts.slice(0, 100).map((e) => ({ ...e, explain: KINDS[e.kind] })),
       failures24h: evts.filter((e) => e.at > since).length,
     });

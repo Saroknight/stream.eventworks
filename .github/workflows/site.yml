@@ -44,3 +44,72 @@ jobs:
           name: site-test-results
           path: test-results/
           retention-days: 14
+
+  # The real installer on a fresh Ubuntu machine, then video with the normal video ports
+  # blocked for the browser: it can only arrive through the port 443 relay.
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Test names for the site and the relay
+        run: |
+          IP=$(hostname -I | awk '{print $1}')
+          echo "IP=$IP" >> "$GITHUB_ENV"
+          echo "$IP stream.test turn.stream.test" | sudo tee -a /etc/hosts
+          getent ahostsv4 turn.stream.test
+
+      - name: Install with setup.sh (local test certificates)
+        run: sudo CADDY_GLOBAL_EXTRA=local_certs bash deploy/linux/setup.sh stream.test "$IP"
+
+      - name: Installed state
+        run: |
+          sudo cat /etc/caddy/Caddyfile
+          sudo cat /etc/livekit/livekit.yaml | grep -v -i secret
+          systemctl is-active caddy livekit streamroom
+          grep -q '^turn:' /etc/livekit/livekit.yaml || sudo grep -q '^turn:' /etc/livekit/livekit.yaml
+
+      - name: Trust the local test certificate authority in Chromium
+        run: |
+          sudo apt-get install -y -q libnss3-tools
+          for _ in $(seq 1 30); do sudo test -f /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt && break; sleep 1; done
+          sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt
+          sudo chmod 644 /tmp/caddy-root.crt
+          mkdir -p ~/.pki/nssdb
+          certutil -d sql:$HOME/.pki/nssdb -N --empty-password 2>/dev/null || true
+          certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n caddy-local -i /tmp/caddy-root.crt
+          for _ in $(seq 1 30); do curl -sf --cacert /tmp/caddy-root.crt https://stream.test/api/app/latest && break; sleep 2; done
+
+      - name: Block the browser from the normal video ports
+        run: |
+          # Only this user's traffic (the browser), so LiveKit's own relay leg still works.
+          for rule in "-p udp --dport 7882" "-p tcp --dport 7881" "-p udp --dport 3478"; do
+            sudo iptables -I OUTPUT $rule -m owner --uid-owner "$(id -u)" -j REJECT
+          done
+          sudo iptables -L OUTPUT -n
+
+      - name: Video through the port 443 relay
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          ADMIN=$(sudo /usr/local/bin/streamroom-admin-link https://stream.test | grep -o 'https://stream.test/join/[^ ]*')
+          node tests/relay.mjs https://stream.test "$ADMIN"
+
+      - name: Server logs
+        if: always()
+        run: |
+          mkdir -p test-results
+          sudo journalctl -u caddy -u livekit -u streamroom --no-pager | tail -400 > test-results/server.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: relay-test-results
+          path: test-results/
+          retention-days: 14

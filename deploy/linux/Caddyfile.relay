@@ -1,0 +1,64 @@
+# Managed by Streamroom's setup.sh (from deploy/linux/Caddyfile.relay). Re-running setup rewrites it.
+#
+# Port 443 carries two things, told apart by the name the client asks for (TLS SNI):
+#   __TURN_DOMAIN__  -> video relay (TURN over TLS) for viewers whose network blocks the normal
+#                       video ports. Caddy does the TLS (it gets the certificate), LiveKit relays.
+#   anything else    -> the web app and LiveKit signaling, served by Caddy on 127.0.0.1:8443.
+# Needs Caddy with the layer4 module (setup.sh installs that build).
+{
+	__GLOBAL_EXTRA__
+	auto_https disable_redirects
+	servers :8443 {
+		protocols h1 h2
+		listener_wrappers {
+			# Keeps real client addresses (for rate limits and the health panel).
+			proxy_protocol {
+				allow 127.0.0.1/32
+			}
+			tls
+		}
+	}
+	layer4 {
+		:443 {
+			@turn tls sni __TURN_DOMAIN__
+			route @turn {
+				tls
+				proxy 127.0.0.1:5349
+			}
+			route {
+				proxy {
+					proxy_protocol v2
+					upstream 127.0.0.1:8443
+				}
+			}
+		}
+	}
+}
+
+http://__DOMAIN__, http://__TURN_DOMAIN__ {
+	redir https://{host}{uri} permanent
+}
+
+https://__DOMAIN__:8443 {
+	bind 127.0.0.1
+	encode zstd gzip
+
+	# LiveKit signaling (WebSocket) and API
+	handle /rtc* {
+		reverse_proxy 127.0.0.1:7880
+	}
+	handle /twirp* {
+		reverse_proxy 127.0.0.1:7880
+	}
+
+	# Everything else: the Streamroom web app
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}
+
+# Only here so Caddy gets and renews the relay's certificate.
+https://__TURN_DOMAIN__:8443 {
+	bind 127.0.0.1
+	respond "Streamroom video relay" 200
+}

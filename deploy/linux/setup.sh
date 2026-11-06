@@ -113,22 +113,104 @@ sed -e "s|__API_KEY__|$LIVEKIT_API_KEY|" -e "s|__API_SECRET__|$LIVEKIT_API_SECRE
 chown root:livekit /etc/livekit/livekit.yaml
 chmod 640 /etc/livekit/livekit.yaml
 
+# ---- port 443 fallback (video relay) ----
+# For viewers whose network blocks the normal video ports: LiveKit's built-in TURN relay,
+# reached on port 443 as turn.<domain>. Caddy shares 443 between the site and the relay, which
+# needs the Caddy build with the layer4 module. Any problem here: skip it and keep the
+# normal setup working.
+TURN_DOMAIN="turn.$DOMAIN"
+RELAY=off
+CADDY_L4=/usr/local/bin/caddy-streamroom
+resolve4() { getent ahostsv4 "$1" 2>/dev/null | awk 'NR==1{print $1}'; }
+install_caddy_l4() {
+  if [[ -x "$CADDY_L4" ]] && "$CADDY_L4" list-modules 2>/dev/null | grep -q '^layer4$'; then return 0; fi
+  local arch; case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) return 1 ;; esac
+  say "Downloading Caddy with the layer4 module (for the port 443 video relay)"
+  local tmp; tmp="$(mktemp)"
+  if curl -fsSL --retry 3 -o "$tmp" "https://caddyserver.com/api/download?os=linux&arch=$arch&p=github.com%2Fmholt%2Fcaddy-l4" \
+     && chmod 755 "$tmp" && "$tmp" list-modules 2>/dev/null | grep -q '^layer4$'; then
+    install -m 755 "$tmp" "$CADDY_L4"; rm -f "$tmp"; return 0
+  fi
+  rm -f "$tmp"; return 1
+}
+caddy_is_ours() {
+  # No config yet, ours, the package's stock welcome page, or just our import line.
+  [[ ! -f /etc/caddy/Caddyfile ]] || grep -q 'Managed by Streamroom\|/usr/share/caddy' /etc/caddy/Caddyfile \
+    || [[ "$(grep -v '^[[:space:]]*\(#\|$\)' /etc/caddy/Caddyfile)" == 'import /etc/caddy/conf.d/*' ]]
+}
+if [[ "${RELAY_443:-on}" == off ]]; then
+  echo "Port 443 relay: turned off (RELAY_443=off)"
+elif [[ -z "$(resolve4 "$TURN_DOMAIN")" || "$(resolve4 "$TURN_DOMAIN")" != "${PUBLIC_IP:-$(resolve4 "$DOMAIN")}" ]]; then
+  echo "Port 443 relay: skipped. To enable it, point $TURN_DOMAIN at this server (same address as $DOMAIN) and re-run."
+elif ! caddy_is_ours; then
+  echo "Port 443 relay: skipped, because /etc/caddy/Caddyfile has your own settings."
+elif ! install_caddy_l4; then
+  echo "Port 443 relay: skipped, couldn't get the Caddy layer4 build. The site works as before."
+else
+  RELAY=on
+fi
+if [[ $RELAY == on ]]; then
+  cat >> /etc/livekit/livekit.yaml <<EOF
+turn:
+  enabled: true
+  domain: $TURN_DOMAIN
+  tls_port: 5349            # plain TURN; Caddy does the TLS on 443 and forwards here
+  external_tls: true
+  udp_port: 3478            # TURN over UDP too  -> open 3478/udp in the firewall
+EOF
+  echo "TURN_DOMAIN=$TURN_DOMAIN" >> "$ENVFILE"
+fi
+
 say "Writing Caddy site for $DOMAIN"
 mkdir -p /etc/caddy/conf.d
-sed "s|__DOMAIN__|$DOMAIN|" "$HERE/Caddyfile" > /etc/caddy/conf.d/streamroom.caddy
-if [[ ! -f /etc/caddy/Caddyfile ]]; then
-  echo 'import /etc/caddy/conf.d/*' > /etc/caddy/Caddyfile
-elif ! grep -q 'conf.d' /etc/caddy/Caddyfile; then
-  cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
-  if grep -q '/usr/share/caddy' /etc/caddy/Caddyfile; then
-    # Stock "welcome page" config from the package: replace it, it would grab port 80.
+CADDY_DROPIN=/etc/systemd/system/caddy.service.d/streamroom.conf
+CADDY_BIN_BEFORE="$(grep -s -o 'caddy-streamroom' "$CADDY_DROPIN" || true)"
+use_plain_caddy() {
+  sed "s|__DOMAIN__|$DOMAIN|" "$HERE/Caddyfile" > /etc/caddy/conf.d/streamroom.caddy
+  if [[ ! -f /etc/caddy/Caddyfile ]] || grep -q 'Managed by Streamroom' /etc/caddy/Caddyfile; then
     echo 'import /etc/caddy/conf.d/*' > /etc/caddy/Caddyfile
-  else
-    # Your own Caddy config: keep it and add ours alongside.
-    printf '\nimport /etc/caddy/conf.d/*\n' >> /etc/caddy/Caddyfile
+  elif ! grep -q 'conf.d' /etc/caddy/Caddyfile; then
+    cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
+    if grep -q '/usr/share/caddy' /etc/caddy/Caddyfile; then
+      # Stock "welcome page" config from the package: replace it, it would grab port 80.
+      echo 'import /etc/caddy/conf.d/*' > /etc/caddy/Caddyfile
+    else
+      # Your own Caddy config: keep it and add ours alongside.
+      printf '\nimport /etc/caddy/conf.d/*\n' >> /etc/caddy/Caddyfile
+    fi
   fi
+  rm -f "$CADDY_DROPIN"
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+if [[ $RELAY == on ]]; then
+  cp -f /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.prev" 2>/dev/null || true
+  sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__TURN_DOMAIN__|$TURN_DOMAIN|g" -e "s|__GLOBAL_EXTRA__|${CADDY_GLOBAL_EXTRA:-}|" \
+    "$HERE/Caddyfile.relay" > /etc/caddy/Caddyfile.new
+  if "$CADDY_L4" validate --config /etc/caddy/Caddyfile.new --adapter caddyfile; then
+    mv /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
+    rm -f /etc/caddy/conf.d/streamroom.caddy
+    mkdir -p "$(dirname "$CADDY_DROPIN")"
+    cat > "$CADDY_DROPIN" <<EOF
+# Streamroom: run the Caddy build with the layer4 module (port 443 shared with the video relay).
+[Service]
+ExecStart=
+ExecStart=$CADDY_L4 run --environ --config /etc/caddy/Caddyfile
+ExecReload=
+ExecReload=$CADDY_L4 reload --config /etc/caddy/Caddyfile --force
+EOF
+    echo "Port 443 relay: on ($TURN_DOMAIN)"
+  else
+    rm -f /etc/caddy/Caddyfile.new
+    echo "Port 443 relay: the Caddy config didn't validate, so it's off. The site works as before."
+    RELAY=off
+    sed -i '/^turn:/,$d' /etc/livekit/livekit.yaml
+    sed -i '/^TURN_DOMAIN=/d' "$ENVFILE"
+    use_plain_caddy
+  fi
+else
+  use_plain_caddy
 fi
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+CADDY_BIN_AFTER="$(grep -s -o 'caddy-streamroom' "$CADDY_DROPIN" || true)"
 
 say "Installing systemd services"
 install -m 644 "$HERE/livekit.service"    /etc/systemd/system/livekit.service
@@ -136,15 +218,19 @@ install -m 644 "$HERE/streamroom.service" /etc/systemd/system/streamroom.service
 systemctl daemon-reload
 systemctl enable --now livekit streamroom caddy
 systemctl restart livekit streamroom
-systemctl reload caddy || systemctl restart caddy
+if [[ "$CADDY_BIN_BEFORE" != "$CADDY_BIN_AFTER" ]]; then
+  systemctl restart caddy # switching Caddy builds needs a restart (a second or two offline)
+else
+  systemctl reload caddy || systemctl restart caddy
+fi
 
 say "Firewall"
-PORTS_MSG="Open these ports: 80/tcp, 443/tcp, 7881/tcp, 7882/udp"
+PORTS_MSG="Open these ports: 80/tcp, 443/tcp, 7881/tcp, 7882/udp, 3478/udp"
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q active; then
-  ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 7881/tcp; ufw allow 7882/udp
+  ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 7881/tcp; ufw allow 7882/udp; ufw allow 3478/udp
   echo "ufw rules added."
 elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port=80/tcp --add-port=443/tcp --add-port=7881/tcp --add-port=7882/udp
+  firewall-cmd --permanent --add-port=80/tcp --add-port=443/tcp --add-port=7881/tcp --add-port=7882/udp --add-port=3478/udp
   firewall-cmd --reload
   echo "firewalld rules added."
 else

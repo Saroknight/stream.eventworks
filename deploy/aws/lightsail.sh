@@ -73,13 +73,14 @@ IP=$(ls_ get-static-ip --static-ip-name "$IPNAME" --query 'staticIp.ipAddress' -
 say "Static IP: $IP"
 
 # ---- 3. firewall ----
-say "Opening ports 22, 80, 443, 7881 (TCP) and 7882 (UDP)"
+say "Opening ports 22, 80, 443, 7881 (TCP), 7882 and 3478 (UDP)"
 ls_ put-instance-public-ports --instance-name "$NAME" --port-infos \
   fromPort=22,toPort=22,protocol=tcp \
   fromPort=80,toPort=80,protocol=tcp \
   fromPort=443,toPort=443,protocol=tcp \
   fromPort=7881,toPort=7881,protocol=tcp \
-  fromPort=7882,toPort=7882,protocol=udp >/dev/null
+  fromPort=7882,toPort=7882,protocol=udp \
+  fromPort=3478,toPort=3478,protocol=udp >/dev/null
 
 # ---- 4. SSH key (Lightsail's default key for this region) ----
 if [[ ! -f "$KEY" ]]; then
@@ -105,8 +106,11 @@ else
     | jq -r --arg d "$DOMAIN." '[.[] | select(.[1] as $z | ($d == $z) or ($d | endswith("." + $z)))] | sort_by(.[1] | length) | last | .[0] // empty' || true)
   if [[ -n "$ZONE_ID" ]]; then
     say "Pointing $DOMAIN at $IP in Route 53"
-    aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch "{\"Changes\":[{\"Action\":\"UPSERT\",
-      \"ResourceRecordSet\":{\"Name\":\"$DOMAIN\",\"Type\":\"A\",\"TTL\":60,\"ResourceRecords\":[{\"Value\":\"$IP\"}]}}]}" >/dev/null
+    # The site, and turn.<site> for the port 443 video relay.
+    for NAME_ in "$DOMAIN" "turn.$DOMAIN"; do
+      aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch "{\"Changes\":[{\"Action\":\"UPSERT\",
+        \"ResourceRecordSet\":{\"Name\":\"$NAME_\",\"Type\":\"A\",\"TTL\":60,\"ResourceRecords\":[{\"Value\":\"$IP\"}]}}]}" >/dev/null
+    done
   elif ! resolves_to_ip "$DOMAIN"; then
     say "Action needed: at your domain provider, create this DNS record"
     echo "    Type: A    Name: $DOMAIN    Value: $IP    (TTL: lowest allowed)"
@@ -119,6 +123,10 @@ else
     printf '.'; sleep 5
   done
   echo " done"
+  # The relay name is optional: wait a little for it, setup.sh skips the relay if it isn't live.
+  if [[ -n "$ZONE_ID" ]]; then
+    for _ in $(seq 1 24); do resolves_to_ip "turn.$DOMAIN" && break; sleep 5; done
+  fi
 fi
 
 # ---- 6. copy app and run setup ----
