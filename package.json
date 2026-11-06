@@ -1,0 +1,19 @@
+{
+  "name": "streamroom",
+  "version": "1.0.0",
+  "description": "Low-latency multi-stream screen sharing on LiveKit",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node scripts/dev.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.3.0",
+    "livekit-client": "^2.23.0",
+    "livekit-server-sdk": "^2.19.2"
+  },
+  "type": "module",
+  "private": true
+}

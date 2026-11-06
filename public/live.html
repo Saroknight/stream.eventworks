@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go Live · Streamroom</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ff4d5e%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="center">
+    <div class="card">
+      <span class="brand"><span class="dot"></span>Streamroom</span>
+
+      <!-- before going live -->
+      <section id="setup">
+        <h1 id="roomTitle">Go live</h1>
+        <p class="lead">Click the button, pick your screen or game window, and you're streaming.</p>
+        <div class="field">
+          <label for="name">Your name</label>
+          <input id="name" type="text" maxlength="32" placeholder="What viewers will see" autocomplete="nickname">
+        </div>
+        <div class="field">
+          <label>What are you sharing?</label>
+          <div class="seg" id="mode">
+            <button type="button" data-mode="motion" aria-pressed="true">🎮 Game or video<small>Smooth, 60 fps</small></button>
+            <button type="button" data-mode="detail" aria-pressed="false">📝 Text or code<small>Sharpest picture</small></button>
+          </div>
+        </div>
+        <details class="help adv" id="adv">
+          <summary>Advanced settings</summary>
+          <p class="hint">For troubleshooting frame rate. Leave on Auto unless you're testing.</p>
+          <div class="adv-grid">
+            <label>Resolution<select data-adv="res">
+              <option value="auto">Auto</option><option value="native">Native (no scaling)</option>
+              <option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option>
+            </select></label>
+            <label>Frame rate<select data-adv="fps">
+              <option value="auto">Auto</option><option value="60">60 fps</option><option value="30">30 fps</option>
+            </select></label>
+            <label>Quality layers<select data-adv="layers">
+              <option value="auto">Auto (on)</option><option value="off">Off (lets the graphics card encode)</option>
+            </select></label>
+            <label>Codec<select data-adv="codec">
+              <option value="auto">Auto</option><option value="h264">H.264</option><option value="vp8">VP8</option>
+              <option value="vp9">VP9</option><option value="av1">AV1</option>
+            </select></label>
+            <label>When struggling<select data-adv="degrade">
+              <option value="auto">Auto</option><option value="maintain-framerate">Keep frame rate</option>
+              <option value="maintain-resolution">Keep sharpness</option><option value="balanced">Balance both</option>
+            </select></label>
+            <label>Max bitrate<select data-adv="bitrate">
+              <option value="auto">Auto</option><option value="3">3 Mbps</option><option value="5">5 Mbps</option>
+              <option value="8">8 Mbps</option><option value="12">12 Mbps</option>
+            </select></label>
+          </div>
+          <button type="button" class="btn sm" id="advReset" style="margin-top:10px">Reset to Auto</button>
+        </details>
+        <button class="btn primary big" id="goBtn">● Go Live</button>
+        <div class="tuner">
+          <button type="button" class="btn ghost" id="tuneBtn" style="width:100%">🔍 Find the best settings for this computer</button>
+          <p class="hint" id="tuneHint">Start your game first and keep it moving. Pick the game's screen when asked. Takes about 45 seconds and nobody sees the test.</p>
+          <div id="tuneOut" class="hidden">
+            <p class="hint" id="tuneStatus"></p>
+            <table class="tune-table" id="tuneTable"></table>
+          </div>
+        </div>
+        <div class="error" id="err"></div>
+        <details class="help">
+          <summary>Tips for the best stream</summary>
+          <ul>
+            <li>Use <b>Chrome</b> or <b>Edge</b>.</li>
+            <li>To include game sound on Windows, choose <b>Entire screen</b> and tick <b>Share system audio</b>. For a browser tab, tick <b>Share tab audio</b>.</li>
+            <li>If a fullscreen game shows black, switch the game to <b>borderless windowed</b>.</li>
+            <li>Keep this tab open while you stream. You can minimize it.</li>
+          </ul>
+        </details>
+      </section>
+
+      <!-- while live -->
+      <section id="onair" class="hidden">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:18px">
+          <span class="live-badge">LIVE</span>
+          <span class="stats" id="stats"></span>
+        </div>
+        <video class="preview" id="preview" muted playsinline autoplay></video>
+        <p class="hint" id="encInfo"></p>
+        <p class="hint warn hidden" id="perfNote"></p>
+        <p class="hint" id="audioNote"></p>
+        <button class="btn sm ghost" id="diagBtn" style="margin:-6px 0 12px">Copy diagnostics</button>
+        <div style="display:flex; gap:8px">
+          <button class="btn" id="switchBtn" style="flex:1">Change what I'm sharing</button>
+          <button class="btn primary" id="stopBtn" style="flex:1">Stop streaming</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module">
+    import * as LK from '/vendor/livekit-client.esm.mjs';
+    import { api, store, livekitUrl, roomIdFromPath, toast } from '/common.js';
+    import { senderDiag, envDiag, copyDiag } from '/diag.js';
+    const $ = (id) => document.getElementById(id);
+
+    const roomId = roomIdFromPath();
+    const streamKey = new URLSearchParams(location.hash.slice(1)).get('k') || '';
+    let mode = store.get('sr.mode', 'motion');
+    let room = null, tracks = [], statsTimer = null;
+
+    // ---- encoder choice ----
+    // H.264 is often encoded on the graphics card, which keeps frame rates up while gaming.
+    // We check once at page load (it can't wait until the click, the screen picker needs the click).
+    // Add ?codec=vp8 (or vp9/av1/h264) to the page address to force a codec for testing.
+    const enc = { codec: 'vp8', hw: false };
+    const encReady = (async () => {
+      const forced = new URLSearchParams(location.search).get('codec');
+      const caps = (window.RTCRtpSender?.getCapabilities?.('video')?.codecs || []).map((c) => c.mimeType.toLowerCase());
+      const probe = async (mime) => {
+        try {
+          const r = await navigator.mediaCapabilities.encodingInfo({
+            type: 'webrtc', video: { contentType: mime, width: 1920, height: 1080, bitrate: 8_000_000, framerate: 60 },
+          });
+          return r.supported ? r.powerEfficient : null;
+        } catch { return null; }
+      };
+      if (forced) { enc.codec = forced; enc.hw = Boolean(await probe(`video/${forced.toUpperCase()}`)); return; }
+      // Software H.264 (OpenH264) with two layers performed far worse than VP8 in testing,
+      // so H.264 is only the default when the browser reports a hardware encoder for it.
+      const h264hw = caps.includes('video/h264') && Boolean(await probe('video/H264'));
+      if (h264hw) { enc.codec = 'h264'; enc.hw = true; }
+      else { enc.codec = 'vp8'; enc.hw = Boolean(await probe('video/VP8')); }
+    })();
+
+    // Encoding profiles. One extra 360p layer lets small tiles and slow viewers get a light copy.
+    // (Each layer is a separate encode, so we keep it to two.)
+    function profile() {
+      if (mode === 'detail') {
+        return {
+          capture: { width: 1920, height: 1080, frameRate: 30 },
+          encoding: { maxBitrate: 5_000_000, maxFramerate: 30 },
+          layers: [new LK.VideoPreset(640, 360, 400_000, 15)],
+          degradation: 'maintain-resolution',
+          fps: 30,
+        };
+      }
+      return {
+        capture: { width: 1920, height: 1080, frameRate: 60 },
+        encoding: { maxBitrate: 8_000_000, maxFramerate: 60 },
+        layers: [new LK.VideoPreset(640, 360, 600_000, 30)],
+        // 'balanced', not 'maintain-framerate': with H.264 the latter made Chrome shrink the picture
+        // to 270p at the slightest bandwidth dip.
+        degradation: 'balanced',
+        fps: 60,
+      };
+    }
+
+    // Advanced overrides (saved per browser). Applied on top of the mode's profile.
+    const adv = Object.assign({ res: 'auto', fps: 'auto', layers: 'auto', codec: 'auto', degrade: 'auto', bitrate: 'auto' }, store.get('sr.adv', {}));
+    const RES = { 1440: [2560, 1440], 1080: [1920, 1080], 720: [1280, 720] };
+    function finalProfile(o = adv) {
+      const p = profile();
+      if (o.fps !== 'auto') { p.fps = Number(o.fps); p.capture.frameRate = p.fps; p.encoding.maxFramerate = p.fps; }
+      if (RES[o.res]) { [p.capture.width, p.capture.height] = RES[o.res]; }
+      p.native = o.res === 'native';
+      if (o.bitrate !== 'auto') p.encoding.maxBitrate = Number(o.bitrate) * 1_000_000;
+      p.simulcast = o.layers !== 'off';
+      if (!p.simulcast) p.layers = [];
+      p.codec = o.codec !== 'auto' ? o.codec : enc.codec;
+      if (o.degrade !== 'auto') p.degradation = o.degrade;
+      return p;
+    }
+    const videoPublishOptions = (p) => ({
+      source: LK.Track.Source.ScreenShare,
+      simulcast: p.simulcast,
+      screenShareEncoding: p.encoding,
+      screenShareSimulcastLayers: p.layers,
+      degradationPreference: p.degradation,
+      videoCodec: p.codec,
+    });
+    document.querySelectorAll('[data-adv]').forEach((sel) => {
+      sel.value = adv[sel.dataset.adv];
+      sel.onchange = () => { adv[sel.dataset.adv] = sel.value; store.set('sr.adv', adv); };
+    });
+    $('advReset').onclick = () => {
+      Object.keys(adv).forEach((k) => adv[k] = 'auto');
+      store.set('sr.adv', adv);
+      document.querySelectorAll('[data-adv]').forEach((sel) => sel.value = 'auto');
+    };
+    if (Object.values(adv).some((v) => v !== 'auto')) $('adv').open = true;
+
+    // ---- setup UI ----
+    $('name').value = store.get('sr.name', '');
+    const setMode = (m) => {
+      mode = m; store.set('sr.mode', m);
+      document.querySelectorAll('#mode button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+    };
+    setMode(mode);
+    document.querySelectorAll('#mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+
+    if (!streamKey) {
+      $('err').textContent = 'This link is missing its streamer key. Ask the host for the full streamer link.';
+      $('goBtn').disabled = true;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      $('err').textContent = window.isSecureContext
+        ? 'This browser cannot share its screen. Please use Chrome or Edge on a computer.'
+        : 'Screen sharing needs a secure (https) address. Ask the host to set up https.';
+      $('goBtn').disabled = true;
+    }
+    api(`/api/rooms/${encodeURIComponent(roomId)}`).then((r) => {
+      $('roomTitle').textContent = `Go live in ${r.title}`;
+      document.title = `Go Live · ${r.title}`;
+    }).catch((e) => { $('err').textContent = e.message; $('goBtn').disabled = true; });
+
+    // Ask the browser for the screen. Must run straight from a click.
+    function capture() {
+      const p = finalProfile();
+      return LK.createLocalScreenTracks({
+        // Native: no size constraint (no scaling), just the frame rate. A 0x0 resolution tells
+        // LiveKit "uncapped"; leaving it out would make LiveKit default to 1080p30.
+        ...(p.native ? { video: { frameRate: { ideal: p.fps } } } : {}),
+        audio: true,
+        systemAudio: 'include',
+        suppressLocalAudioPlayback: false,
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
+        resolution: p.native ? { width: 0, height: 0, frameRate: p.fps } : p.capture,
+        contentHint: mode === 'motion' ? 'motion' : 'detail',
+      });
+    }
+
+    async function publish(newTracks) {
+      await encReady;
+      const p = finalProfile();
+      for (const t of newTracks) {
+        if (t.kind === 'video') {
+          await room.localParticipant.publishTrack(t, videoPublishOptions(p));
+          t.attach($('preview'));
+          // User clicked the browser's own "Stop sharing" bar.
+          t.on(LK.TrackEvent.Ended, () => stop());
+        } else {
+          await room.localParticipant.publishTrack(t, {
+            source: LK.Track.Source.ScreenShareAudio,
+            audioPreset: LK.AudioPresets.musicHighQualityStereo,
+            dtx: false,
+            red: false,
+            forceStereo: true,
+          });
+        }
+      }
+      const hasAudio = newTracks.some((t) => t.kind === 'audio');
+      $('audioNote').textContent = hasAudio
+        ? '🔊 Sound is being shared.'
+        : '🔇 No sound is being shared. To add it, click "Change what I\'m sharing" and tick the share-audio box.';
+    }
+
+    $('goBtn').onclick = async () => {
+      $('err').textContent = '';
+      const name = $('name').value.trim();
+      if (!name) { $('err').textContent = 'Type your name first so viewers know who you are.'; $('name').focus(); return; }
+      store.set('sr.name', name);
+      $('goBtn').disabled = true;
+
+      try {
+        // 1) screen picker first, while we still have the click
+        tracks = await capture();
+      } catch (e) {
+        $('goBtn').disabled = false;
+        $('err').textContent = e.name === 'NotAllowedError' ? 'Screen sharing was cancelled. Click Go Live to try again.' : e.message;
+        return;
+      }
+
+      try {
+        // 2) token + connect + publish
+        $('goBtn').textContent = 'Connecting…';
+        const { token, url } = await api('/api/token', { roomId, role: 'streamer', streamKey, name });
+        room = new LK.Room({ dynacast: true });
+        room.on(LK.RoomEvent.Disconnected, (reason) => {
+          if (room) { toast('Disconnected from the server.'); stop(true); }
+        });
+        room.on(LK.RoomEvent.Reconnecting, () => toast('Connection hiccup, reconnecting…'));
+        await room.connect(livekitUrl(url), token);
+        await publish(tracks);
+        $('setup').classList.add('hidden');
+        $('onair').classList.remove('hidden');
+        startStats();
+        window.addEventListener('beforeunload', warnOnLeave);
+      } catch (e) {
+        console.error(e);
+        tracks.forEach((t) => t.stop());
+        tracks = [];
+        if (room) { const r = room; room = null; r.disconnect(); }
+        $('err').textContent = `Could not start the stream: ${e.message}`;
+      } finally {
+        $('goBtn').disabled = false;
+        $('goBtn').textContent = '● Go Live';
+      }
+    };
+
+    $('switchBtn').onclick = async () => {
+      let next;
+      try { next = await capture(); } catch { return; } // cancelled: keep current share
+      const old = tracks;
+      tracks = next;
+      for (const t of old) { t.removeAllListeners(LK.TrackEvent.Ended); await room.localParticipant.unpublishTrack(t, true); }
+      await publish(next);
+    };
+
+    $('stopBtn').onclick = () => stop();
+
+    async function stop(fromDisconnect = false) {
+      clearInterval(statsTimer);
+      window.removeEventListener('beforeunload', warnOnLeave);
+      tracks.forEach((t) => t.stop());
+      tracks = [];
+      const r = room; room = null;
+      if (r && !fromDisconnect) await r.disconnect();
+      $('onair').classList.add('hidden');
+      $('setup').classList.remove('hidden');
+    }
+
+    // ---- "Find best settings" ----
+    // Captures the screen once, then publishes it into a private test room with each candidate
+    // setup for a few seconds and measures the frame rate actually sent. Dynacast is off so the
+    // encoder runs even though nobody is watching. The winner is saved to Advanced settings.
+    function candidates() {
+      const fps = mode === 'motion' ? '60' : '30';
+      const h264 = enc.codec === 'h264' || (window.RTCRtpSender?.getCapabilities?.('video')?.codecs || [])
+        .some((c) => c.mimeType.toLowerCase() === 'video/h264');
+      const list = [
+        { codec: 'h264', layers: 'auto', res: '1080' },
+        { codec: 'h264', layers: 'off', res: '1080' },
+        { codec: 'vp8', layers: 'auto', res: '1080' },
+        { codec: 'vp8', layers: 'off', res: '1080' },
+        { codec: 'vp8', layers: 'off', res: '720' },
+        { codec: 'h264', layers: 'off', res: '720' },
+      ].filter((c) => h264 || c.codec !== 'h264');
+      return list.map((c) => ({ ...c, fps, degrade: 'auto', bitrate: 'auto' }));
+    }
+    const describe = (c) => `${c.codec === 'h264' ? 'H.264' : c.codec.toUpperCase()} · ${c.layers === 'off' ? '1 layer' : '2 layers'} · ${c.res}p${c.fps}`;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    $('tuneBtn').onclick = async () => {
+      $('err').textContent = '';
+      let testTracks = [], testRoom = null;
+      try {
+        $('tuneBtn').disabled = true; $('goBtn').disabled = true;
+        // Screen picker first, while we still have the click.
+        testTracks = await LK.createLocalScreenTracks({
+          audio: false, selfBrowserSurface: 'exclude',
+          resolution: { width: 1920, height: 1080, frameRate: mode === 'motion' ? 60 : 30 },
+          contentHint: mode === 'motion' ? 'motion' : 'detail',
+        });
+        const video = testTracks.find((t) => t.kind === 'video');
+        await encReady;
+        $('tuneOut').classList.remove('hidden');
+        $('tuneTable').innerHTML = '';
+        $('tuneStatus').textContent = 'Connecting…';
+        const { token, url } = await api('/api/token', { roomId, role: 'streamer', streamKey, name: 'settings test', test: true });
+        testRoom = new LK.Room({ dynacast: false });
+        await testRoom.connect(livekitUrl(url), token);
+
+        const results = [];
+        const list = candidates();
+        for (const [i, c] of list.entries()) {
+          $('tuneStatus').textContent = `Testing ${i + 1} of ${list.length}: ${describe(c)}… keep the game moving`;
+          const p = finalProfile(c);
+          await video.mediaStreamTrack.applyConstraints({
+            width: { ideal: p.capture.width }, height: { ideal: p.capture.height }, frameRate: { ideal: p.fps },
+          }).catch(() => {});
+          await testRoom.localParticipant.publishTrack(video, videoPublishOptions(p));
+          await sleep(3000); // let the encoder and bandwidth estimate settle
+          const samples = [];
+          for (let k = 0; k < 5; k++) {
+            await sleep(1000);
+            const d = await senderDiag(video).catch(() => null);
+            const top = d?.layers[0];
+            if (top) samples.push({ fps: top.fps || 0, height: top.height || 0, hw: top.hardware, enc: top.encoder, cap: d.capture.fps || 0 });
+          }
+          await testRoom.localParticipant.unpublishTrack(video, false);
+          const avg = (k) => samples.reduce((a, x) => a + x[k], 0) / Math.max(1, samples.length);
+          const r = { c, fps: avg('fps'), cap: avg('cap'), height: Math.round(avg('height')), hw: samples.some((x) => x.hw), enc: samples.at(-1)?.enc || '' };
+          results.push(r);
+          renderTune(results, null);
+          await sleep(500);
+        }
+
+        // Winner: highest frame rate; among setups within 10% of it, prefer sharper, then 2 layers.
+        const bestFps = Math.max(...results.map((r) => r.fps));
+        const pick = results
+          .filter((r) => r.fps >= bestFps * 0.9)
+          .sort((a, b) => (b.height - a.height) || ((a.c.layers === 'off') - (b.c.layers === 'off')))[0];
+        renderTune(results, pick);
+        if (pick && bestFps > 0) {
+          Object.assign(adv, { codec: pick.c.codec, layers: pick.c.layers, res: pick.c.res, fps: 'auto', degrade: 'auto', bitrate: 'auto' });
+          store.set('sr.adv', adv);
+          document.querySelectorAll('[data-adv]').forEach((sel) => sel.value = adv[sel.dataset.adv]);
+          $('tuneStatus').innerHTML = `Best on this computer: <b>${describe(pick.c)}</b> at about ${Math.round(pick.fps)} fps. `
+            + 'Saved to Advanced settings. Click Go Live when ready.'
+            + (pick.cap < Number(pick.c.fps) * 0.6 ? ' Note: your screen capture itself is slow, see the tips below.' : '');
+        } else {
+          $('tuneStatus').textContent = 'The test could not measure anything. Try again with the game moving, or use Chrome or Edge.';
+        }
+      } catch (e) {
+        console.error(e);
+        $('err').textContent = e.name === 'NotAllowedError' ? 'Screen sharing was cancelled.' : `Test failed: ${e.message}`;
+      } finally {
+        testTracks.forEach((t) => t.stop());
+        if (testRoom) testRoom.disconnect();
+        $('tuneBtn').disabled = false; $('goBtn').disabled = !streamKey;
+      }
+    };
+
+    function renderTune(results, pick) {
+      const rows = results.map((r) => `<tr class="${r === pick ? 'win' : ''}">
+        <td>${describe(r.c)}</td><td>${Math.round(r.fps)} fps</td><td>${r.height || '?'}p</td>
+        <td>${r.hw ? 'graphics card' : 'processor'}</td></tr>`).join('');
+      $('tuneTable').innerHTML = `<tr><th>Setup</th><th>Sent</th><th>Size</th><th>Encoder</th></tr>${rows}`;
+    }
+
+    function warnOnLeave(e) { e.preventDefault(); e.returnValue = ''; }
+
+    // Show what we're actually sending (top simulcast layer).
+    // Live readout: what the screen capture produces vs what the encoder sends, which encoder
+    // is in use, and what's holding it back. Advice only shows after a problem lasts a few seconds.
+    const ADVICE = {
+      capture: 'Your screen capture is slow. Share your <b>Entire screen</b> instead of a window, set the game to <b>borderless windowed</b>, and make sure "Use graphics acceleration when available" is on in your browser settings (System).',
+      cpu: 'Your computer can\'t encode fast enough. Close other heavy apps or browser tabs, check graphics acceleration is on in your browser settings, or switch to Chrome or Edge.',
+      bandwidth: 'Your internet upload is too slow for this quality, so frames are being dropped. Pause big downloads or uploads, or use a wired connection.',
+    };
+    ADVICE.tcp = 'Your connection to the server is using the slower TCP fallback, which causes stutter. UDP port 7882 is being blocked, by your network or the server firewall.';
+    let strikes = {};
+    let lastDiag = null;
+
+    function startStats() {
+      clearInterval(statsTimer);
+      strikes = { capture: 0, cpu: 0, bandwidth: 0, tcp: 0 };
+      $('encInfo').textContent = 'Measuring…';
+      let failures = 0;
+      statsTimer = setInterval(async () => {
+        const v = tracks.find((t) => t.kind === 'video');
+        if (!v) return;
+        const d = await senderDiag(v).catch((e) => { console.warn(e); return null; });
+        const top = d?.layers.find((l) => l.active !== false && l.fps) || d?.layers[0];
+        if (!top) {
+          if (++failures >= 5) $('encInfo').textContent = 'This browser is not reporting stream stats. Try Chrome or Edge.';
+          return;
+        }
+        lastDiag = d;
+        const target = finalProfile().fps;
+        const capFps = d.capture.fps || 0;
+        $('stats').textContent = `${top.height || '?'}p · ${Math.round(top.fps || 0)} fps`;
+        $('encInfo').textContent = `Capturing ${d.capture.height || '?'}p at ${Math.round(capFps)} fps · sending ${Math.round(top.fps || 0)} fps · `
+          + `${top.codec || enc.codec.toUpperCase()} on ${top.hardware ? 'graphics card' : 'processor'}`
+          + (d.transport.protocol ? ` · ${d.transport.protocol.toUpperCase()}` : '');
+
+        // Which problem is it? Count consecutive seconds of each.
+        const captureSlow = capFps > 0 && capFps < target * 0.6;
+        strikes.capture = captureSlow ? strikes.capture + 1 : 0;
+        strikes.cpu = !captureSlow && top.limitedBy === 'cpu' ? strikes.cpu + 1 : 0;
+        strikes.bandwidth = !captureSlow && top.limitedBy === 'bandwidth' ? strikes.bandwidth + 1 : 0;
+        strikes.tcp = d.transport.protocol === 'tcp' ? strikes.tcp + 1 : 0;
+        const problem = ['capture', 'cpu', 'bandwidth', 'tcp'].find((k) => strikes[k] >= 4);
+        $('perfNote').innerHTML = problem ? `⚠️ ${ADVICE[problem]}` : '';
+        $('perfNote').classList.toggle('hidden', !problem);
+      }, 1000);
+    }
+
+    $('diagBtn').onclick = async () => {
+      const v = tracks.find((t) => t.kind === 'video');
+      const d = (await senderDiag(v).catch(() => null)) || lastDiag;
+      await copyDiag({ env: envDiag(), mode, advanced: adv, encoderGuess: enc, stream: d });
+      toast('Diagnostics copied. Paste them to whoever is helping you.');
+    };
+  </script>
+</body>
+</html>

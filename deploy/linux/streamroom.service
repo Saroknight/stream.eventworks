@@ -1,0 +1,24 @@
+[Unit]
+Description=Streamroom web app
+After=network-online.target livekit.service
+Wants=network-online.target
+
+[Service]
+User=streamroom
+Group=streamroom
+WorkingDirectory=/opt/streamroom
+EnvironmentFile=/etc/streamroom.env
+Environment=HOST=127.0.0.1
+Environment=DATA_DIR=/var/lib/streamroom
+StateDirectory=streamroom
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/streamroom
+
+[Install]
+WantedBy=multi-user.target

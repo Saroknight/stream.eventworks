@@ -1,0 +1,18 @@
+# Streamroom: HTTPS for the web app and LiveKit signaling on one domain.
+# Caddy gets and renews the TLS certificate automatically.
+__DOMAIN__ {
+	encode zstd gzip
+
+	# LiveKit signaling (WebSocket) and API
+	handle /rtc* {
+		reverse_proxy 127.0.0.1:7880
+	}
+	handle /twirp* {
+		reverse_proxy 127.0.0.1:7880
+	}
+
+	# Everything else: the Streamroom web app
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

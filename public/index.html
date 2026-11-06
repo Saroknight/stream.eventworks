@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Streamroom</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ff4d5e%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="center">
+    <div class="card">
+      <span class="brand"><span class="dot"></span>Streamroom</span>
+
+      <section id="create">
+        <h1>Start a stream room</h1>
+        <p class="lead">You'll get one link for the people streaming and one for everyone watching.</p>
+        <div class="field">
+          <label for="title">Room name</label>
+          <input id="title" type="text" maxlength="32" placeholder="Friday game night" autocomplete="off">
+        </div>
+        <div class="field hidden" id="pwField">
+          <label for="pw">Admin password</label>
+          <input id="pw" type="password" autocomplete="current-password">
+        </div>
+        <button class="btn primary big" id="createBtn">Create room</button>
+        <div class="error" id="err"></div>
+      </section>
+
+      <section id="result" class="hidden">
+        <h1 id="resTitle">Room ready</h1>
+        <p class="lead">Send these links out. Anyone with the streamer link can go live, so share it only with streamers.</p>
+        <label>Streamer link</label>
+        <div class="linkbox"><input id="liveLink" type="text" readonly><button class="btn" data-copy="liveLink">Copy</button></div>
+        <label>Viewer link</label>
+        <div class="linkbox"><input id="watchLink" type="text" readonly><button class="btn" data-copy="watchLink">Copy</button></div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <a class="btn primary" id="openWatch" style="text-decoration:none; flex:1">Open viewer</a>
+          <button class="btn" id="again">New room</button>
+        </div>
+      </section>
+
+      <section id="recentWrap" class="hidden">
+        <div class="divider"></div>
+        <label>Your recent rooms</label>
+        <ul class="recent" id="recent"></ul>
+      </section>
+    </div>
+  </main>
+
+  <script type="module">
+    import { api, store, copy } from '/common.js';
+    const $ = (id) => document.getElementById(id);
+    const links = (r) => ({
+      live: `${location.origin}/live/${r.roomId}#k=${r.streamKey}`,
+      watch: `${location.origin}/watch/${r.roomId}`,
+    });
+
+    api('/api/config').then((c) => { if (c.needsAdminPassword) $('pwField').classList.remove('hidden'); });
+    $('pw').value = store.get('sr.adminPw', '');
+
+    function show(r) {
+      const l = links(r);
+      $('resTitle').textContent = r.title;
+      $('liveLink').value = l.live;
+      $('watchLink').value = l.watch;
+      $('openWatch').href = l.watch;
+      $('create').classList.add('hidden');
+      $('result').classList.remove('hidden');
+    }
+
+    function renderRecent() {
+      const list = store.get('sr.rooms', []);
+      $('recentWrap').classList.toggle('hidden', !list.length);
+      $('recent').replaceChildren(...list.map((r) => {
+        const li = document.createElement('li');
+        const span = document.createElement('span');
+        span.textContent = r.title;
+        const b = document.createElement('button');
+        b.className = 'btn sm';
+        b.textContent = 'Show links';
+        b.onclick = () => show(r);
+        li.append(span, b);
+        return li;
+      }));
+    }
+
+    $('createBtn').onclick = async () => {
+      $('err').textContent = '';
+      $('createBtn').disabled = true;
+      try {
+        const r = await api('/api/rooms', { title: $('title').value, adminPassword: $('pw').value });
+        if ($('pw').value) store.set('sr.adminPw', $('pw').value);
+        store.set('sr.rooms', [r, ...store.get('sr.rooms', [])].slice(0, 8));
+        show(r);
+        renderRecent();
+      } catch (e) {
+        $('err').textContent = e.message;
+      } finally {
+        $('createBtn').disabled = false;
+      }
+    };
+    $('title').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('createBtn').click(); });
+    $('again').onclick = () => { $('result').classList.add('hidden'); $('create').classList.remove('hidden'); $('title').value = ''; };
+    document.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => copy($(b.dataset.copy).value));
+    renderRecent();
+  </script>
+</body>
+</html>

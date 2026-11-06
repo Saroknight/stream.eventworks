@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Watch · Streamroom</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ff4d5e%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="viewer">
+    <header class="topbar">
+      <a class="brand" href="/" title="Streamroom"><span class="dot"></span></a>
+      <span class="title" id="title">Connecting…</span>
+      <span class="count" id="count"></span>
+      <div class="layouts" role="group" aria-label="Layout">
+        <button data-layout="grid" title="Grid (G)">Grid</button>
+        <button data-layout="spotlight" title="Spotlight (S)">Spotlight</button>
+        <button data-layout="pip" title="Picture in picture (P)">PiP</button>
+      </div>
+      <button class="btn sm" id="muteAll" title="Mute all (M)">🔊 Sound on</button>
+      <button class="btn sm" id="diagBtn" title="Show detailed stats and copy diagnostics">Stats</button>
+      <button class="btn sm" id="fsAll" title="Fullscreen">⛶</button>
+    </header>
+    <main class="stage grid" id="stage">
+      <div class="empty" id="empty"><div><b>Nobody is live yet</b>Streams will pop up here automatically.</div></div>
+    </main>
+  </div>
+  <button class="btn primary audio-gate hidden" id="audioGate">🔊 Click to turn on sound</button>
+
+  <script type="module">
+    import * as LK from '/vendor/livekit-client.esm.mjs';
+    import { api, store, livekitUrl, roomIdFromPath, toast } from '/common.js';
+    import { receiverDiag, envDiag, copyDiag } from '/diag.js';
+    const $ = (id) => document.getElementById(id);
+    const stage = $('stage');
+    const roomId = roomIdFromPath();
+
+    let layout = store.get('sr.layout', 'grid');
+    let focusId = null;
+    let mutedAll = store.get('sr.mutedAll', false);
+    const volumes = store.get('sr.volumes', {}); // by streamer name
+    const tiles = new Map(); // identity -> tile state
+
+    const room = new LK.Room({
+      // Each tile only receives the quality its on-screen size needs. The 1.5x floor biases
+      // toward the sharper layer on normal (non-retina) screens, which matters for text.
+      adaptiveStream: { pixelDensity: Math.max(1.5, window.devicePixelRatio || 1) },
+      dynacast: true,
+    });
+
+    // ---------- tiles ----------
+    function ensureTile(p) {
+      let t = tiles.get(p.identity);
+      if (t) return t;
+      const el = document.createElement('div');
+      el.className = 'tile';
+      el.tabIndex = 0;
+      el.innerHTML = `
+        <video playsinline autoplay muted></video>
+        <div class="label"><span class="name"></span><span class="q"></span></div>
+        <div class="controls">
+          <label class="vol hidden" title="Volume"><span>🔊</span><input type="range" min="0" max="1" step="0.05"></label>
+          <button data-act="fs" title="Fullscreen">⛶</button>
+        </div>`;
+      el.querySelector('.name').textContent = p.name || 'Streamer';
+      t = { p, el, video: el.querySelector('video'), videoTrack: null, audioTrack: null, last: null };
+
+      const range = el.querySelector('input');
+      range.value = volumes[p.name] ?? 1;
+      range.oninput = () => {
+        volumes[p.name] = Number(range.value);
+        store.set('sr.volumes', volumes);
+        applyVolume(t);
+      };
+      range.onclick = (e) => e.stopPropagation();
+      el.querySelector('.vol').onclick = (e) => e.stopPropagation();
+      el.querySelector('[data-act=fs]').onclick = (e) => { e.stopPropagation(); fullscreen(el); };
+      el.onclick = () => onTileClick(p.identity);
+      el.ondblclick = () => fullscreen(el);
+
+      tiles.set(p.identity, t);
+      stage.appendChild(el);
+      if (!focusId) focusId = p.identity;
+      relayout();
+      return t;
+    }
+
+    function removeTile(identity) {
+      const t = tiles.get(identity);
+      if (!t) return;
+      t.el.remove();
+      tiles.delete(identity);
+      if (focusId === identity) focusId = tiles.keys().next().value || null;
+      relayout();
+    }
+
+    function applyVolume(t) {
+      const v = mutedAll ? 0 : Number(t.el.querySelector('input').value);
+      t.p.setVolume(v, LK.Track.Source.ScreenShareAudio);
+    }
+
+    function onTileClick(identity) {
+      if (layout === 'grid' && tiles.size > 1) { focusId = identity; setLayout('spotlight'); return; }
+      focusId = identity;
+      relayout();
+    }
+
+    function fullscreen(el) {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else el.requestFullscreen?.();
+    }
+
+    // ---------- layouts ----------
+    function setLayout(l) {
+      layout = l;
+      store.set('sr.layout', l);
+      relayout();
+    }
+
+    function relayout() {
+      const n = tiles.size;
+      $('empty').classList.toggle('hidden', n > 0);
+      document.querySelectorAll('[data-layout]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.layout === layout)));
+      // Spotlight and PiP only make sense with 2+ streams.
+      const eff = n < 2 ? 'grid' : layout;
+      stage.className = `stage ${eff}`;
+
+      const ordered = [...tiles.values()];
+      ordered.forEach((t) => {
+        t.el.classList.toggle('focus', t.p.identity === focusId);
+        t.el.style.top = '';
+        t.el.style.order = t.p.identity === focusId ? '-1' : '0';
+      });
+
+      if (eff === 'grid') {
+        stage.style.setProperty('--cols', bestColumns(n));
+      } else if (eff === 'spotlight') {
+        stage.style.setProperty('--side', Math.max(1, n - 1));
+      } else if (eff === 'pip') {
+        let i = 0;
+        for (const t of ordered) {
+          if (t.p.identity === focusId) continue;
+          const h = Math.max(90, (stage.clientWidth * 0.22 * 9) / 16);
+          t.el.style.top = `${22 + i * (h + 12)}px`;
+          i++;
+        }
+      }
+      updateCount();
+    }
+
+    // Pick the column count that makes 16:9 tiles as large as possible in the stage.
+    function bestColumns(n) {
+      if (n <= 1) return 1;
+      const W = stage.clientWidth - 20, H = stage.clientHeight - 20;
+      let best = 1, bestArea = 0;
+      for (let cols = 1; cols <= n; cols++) {
+        const rows = Math.ceil(n / cols);
+        const w = Math.min((W - (cols - 1) * 10) / cols, ((H - (rows - 1) * 10) / rows) * 16 / 9);
+        if (w * w > bestArea) { bestArea = w * w; best = cols; }
+      }
+      return best;
+    }
+    new ResizeObserver(() => relayout()).observe(stage);
+
+    function updateCount() {
+      const all = [...room.remoteParticipants.values()];
+      const watching = all.filter((p) => roleOf(p) === 'viewer').length + 1;
+      $('count').textContent = `${tiles.size} live · ${watching} watching`;
+    }
+    const roleOf = (p) => { try { return JSON.parse(p.metadata || '{}').role; } catch { return undefined; } };
+
+    // ---------- sound ----------
+    function renderMute() {
+      $('muteAll').textContent = mutedAll ? '🔇 Muted' : '🔊 Sound on';
+      tiles.forEach(applyVolume);
+    }
+    $('muteAll').onclick = () => { mutedAll = !mutedAll; store.set('sr.mutedAll', mutedAll); renderMute(); };
+    $('audioGate').onclick = async () => { await room.startAudio(); $('audioGate').classList.add('hidden'); };
+    room.on(LK.RoomEvent.AudioPlaybackStatusChanged, () => {
+      $('audioGate').classList.toggle('hidden', room.canPlaybackAudio);
+    });
+
+    // ---------- room events ----------
+    room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
+      if (track.source === LK.Track.Source.ScreenShare && track.kind === 'video') {
+        const t = ensureTile(p);
+        t.videoTrack = track;
+        track.attach(t.video);
+      } else if (track.source === LK.Track.Source.ScreenShareAudio) {
+        const t = ensureTile(p);
+        t.audioTrack = track;
+        const a = track.attach();
+        a.style.display = 'none';
+        t.el.appendChild(a);
+        t.el.querySelector('.vol').classList.remove('hidden');
+        applyVolume(t);
+        if (!room.canPlaybackAudio) $('audioGate').classList.remove('hidden');
+      }
+    });
+    room.on(LK.RoomEvent.TrackUnsubscribed, (track, pub, p) => {
+      track.detach().forEach((e) => { if (e.tagName === 'AUDIO') e.remove(); });
+      const t = tiles.get(p.identity);
+      if (!t) return;
+      if (track.kind === 'video') { t.videoTrack = null; removeTile(p.identity); }
+      else { t.audioTrack = null; t.el.querySelector('.vol').classList.add('hidden'); }
+    });
+    room.on(LK.RoomEvent.ParticipantDisconnected, (p) => { removeTile(p.identity); updateCount(); });
+    room.on(LK.RoomEvent.ParticipantConnected, updateCount);
+    room.on(LK.RoomEvent.Reconnecting, () => toast('Connection hiccup, reconnecting…'));
+    room.on(LK.RoomEvent.Reconnected, () => toast('Back online'));
+    room.on(LK.RoomEvent.Disconnected, () => { $('title').textContent = 'Disconnected. Refresh to rejoin.'; });
+
+    // Live quality readout on each tile (e.g. "1080p · 60"). "Stats" adds codec, loss and connection type.
+    let showStats = false;
+    setInterval(async () => {
+      for (const t of tiles.values()) {
+        if (!t.videoTrack) continue;
+        const d = await receiverDiag(t.videoTrack).catch(() => null);
+        if (!d) continue;
+        t.diag = d;
+        let label = d.height ? `${d.height}p · ${Math.round(d.fps || 0)}` : '';
+        if (showStats && d.height) {
+          const lost = d.packetsReceived ? Math.round((d.packetsLost / (d.packetsLost + d.packetsReceived)) * 1000) / 10 : 0;
+          label += ` fps · ${d.codec || '?'}${d.hardware ? ' (GPU)' : ''} · loss ${lost}% · ${(d.transport.protocol || '?').toUpperCase()}`
+            + (d.transport.rttMs != null ? ` · ${d.transport.rttMs} ms` : '');
+        }
+        t.el.querySelector('.q').textContent = label;
+      }
+    }, 1000);
+
+    $('diagBtn').onclick = async () => {
+      showStats = !showStats;
+      $('diagBtn').setAttribute('aria-pressed', String(showStats));
+      $('diagBtn').textContent = showStats ? 'Stats ✓' : 'Stats';
+      if (!showStats) return;
+      const streams = [];
+      for (const t of tiles.values()) {
+        streams.push({ streamer: t.p.name, ...((await receiverDiag(t.videoTrack).catch(() => null)) || t.diag || {}) });
+      }
+      await copyDiag({ env: envDiag(), layout, streams });
+      toast('Detailed stats on. Diagnostics copied to your clipboard.', 3000);
+    };
+
+    // ---------- controls ----------
+    document.querySelectorAll('[data-layout]').forEach((b) => b.onclick = () => setLayout(b.dataset.layout));
+    $('fsAll').onclick = () => fullscreen(document.documentElement);
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === 'g') setLayout('grid');
+      else if (k === 's') setLayout('spotlight');
+      else if (k === 'p') setLayout('pip');
+      else if (k === 'm') $('muteAll').click();
+      else if (k === 'f' && focusId) fullscreen(tiles.get(focusId).el);
+      else if (k === 'arrowright' || k === 'arrowleft') {
+        const ids = [...tiles.keys()];
+        if (ids.length < 2) return;
+        const i = ids.indexOf(focusId);
+        focusId = ids[(i + (k === 'arrowright' ? 1 : -1) + ids.length) % ids.length];
+        relayout();
+      }
+    });
+
+    // ---------- go ----------
+    (async () => {
+      try {
+        const name = store.get('sr.name', '') || 'Viewer';
+        const { token, url, title } = await api('/api/token', { roomId, role: 'viewer', name });
+        $('title').textContent = title;
+        document.title = `${title} · Streamroom`;
+        await room.connect(livekitUrl(url), token);
+        renderMute();
+        updateCount();
+      } catch (e) {
+        $('title').textContent = e.message;
+        console.error(e);
+      }
+    })();
+  </script>
+</body>
+</html>

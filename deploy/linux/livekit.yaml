@@ -1,0 +1,11 @@
+# LiveKit media server config for the Arch server.
+# setup.sh copies this to /etc/livekit/livekit.yaml and fills in the key/secret.
+port: 7880                 # signaling (WebSocket); reached through Caddy, keep closed in the firewall
+rtc:
+  tcp_port: 7881           # media fallback over TCP  -> open in firewall
+  udp_port: 7882           # all UDP media on one port -> open in firewall
+  use_external_ip: true    # advertise the server's public IP to browsers
+keys:
+  __API_KEY__: __API_SECRET__
+logging:
+  level: info
