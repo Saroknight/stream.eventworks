@@ -11,12 +11,23 @@ may warn that the app is unrecognized (it isn't code-signed): click **More info 
 
 ## Use it
 
-In a room, click **Go Live**, then **Open the app**. The browser hands the room to the app
-through the `streamroom://` link the installer registers, and you're live under your
-account's name. The window shows LIVE status, frame rates, bitrate and a Stop button.
-Closing it keeps you live (the app stays in the tray); right-click the tray icon to stop.
+**First time:** in a room on the site, click **Go Live**, then **Open Streamroom Live**. The
+browser launches the app through the `streamroom://` link the installer registers, with a
+single-use sign-in code. The app trades it for its own key (stored encrypted with Windows DPAPI,
+revocable from the admin page) and goes live.
 
-Settings (quality, frame rate, bitrate, screen, PC audio, mouse cursor) are saved and can be
+**After that** the app works on its own: it lists the rooms, **starts a room and goes live**,
+**goes live** in any room, opens a room in the browser to **watch**, **ends** rooms you started
+(or any room, for the admin), and **signs out** from the ⋯ menu. While live it shows the room,
+how many others are in it, frame rates, bitrate and a Stop button. Closing the window keeps you
+live (the app stays in the tray); right-click the tray icon to stop.
+
+**Sound** (Settings): *Everything except Discord* (default, so viewers don't hear your voice chat
+echoed back), *Only certain apps* (tick them from the apps playing sound now), *All PC audio*, or
+*No sound*. Per-app capture needs Windows 10 build 20348+ or Windows 11; older Windows shares all
+PC audio and says so. Installs from before this setting keep sharing all PC audio until changed.
+
+Settings (quality, frame rate, bitrate, screen, sound, mouse cursor) are saved and can be
 applied mid-stream. **Copy diagnostics** at the bottom copies everything useful for a bug report.
 
 The app checks GitHub Releases for updates and shows **Update now** when one is out (never
@@ -27,7 +38,7 @@ mid-stream). Updates are verified against the release's `SHA256SUMS` before they
 | Folder | What |
 |---|---|
 | `wincap/` | Windows capture, cursor drawing, GPU conversion and hardware encoding |
-| `core/` | Joining a room from an app link and publishing the stream |
+| `core/` | Sign-in and the server API (`api.rs`), links, and publishing the stream |
 | `desktop/` | The Tauri app: window (`ui/`), tray, deep links, updater, installer config |
 | `cli/` | `streamroom-live-cli.exe`, the same engine from a terminal (troubleshooting) |
 
