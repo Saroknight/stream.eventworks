@@ -3,3 +3,4 @@ data/
 .env
 app/target/
 app/desktop/gen/
+test-results/

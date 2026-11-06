@@ -1,0 +1,46 @@
+name: Site tests
+
+# On every push: start LiveKit and the site on a fresh machine and drive real browsers through
+# sign-in, invites, rooms, streaming and the app hand-off (tests/e2e.mjs).
+
+on:
+  push:
+    paths-ignore:
+      - "app/**"
+      - "**.md"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          curl -sSL https://get.livekit.io | bash
+          livekit-server --version
+
+      - name: End-to-end test
+        run: npm run test:e2e
+
+      - name: Keep logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-test-results
+          path: test-results/
+          retention-days: 14

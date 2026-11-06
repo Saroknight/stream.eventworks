@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node scripts/dev.js",
-    "admin-link": "node server/cli.js admin-link"
+    "admin-link": "node server/cli.js admin-link",
+    "test:e2e": "node tests/e2e.mjs"
   },
   "author": "",
   "license": "ISC",
@@ -17,5 +18,8 @@
     "qrcode": "^1.5.4"
   },
   "type": "module",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
 }

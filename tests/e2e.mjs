@@ -1,0 +1,216 @@
+// End-to-end test: starts LiveKit and the site with empty data, then drives real browsers
+// through the main flows. Runs in CI on every push, and locally with `npm run test:e2e`.
+//
+// Needs: livekit-server on PATH (or LIVEKIT_BIN), Playwright with Chromium
+// (`npx playwright install chromium`), or CHROME_PATH pointing at a Chrome binary.
+import { spawn, execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PORT = Number(process.env.E2E_PORT || 3300);
+const BASE = `http://localhost:${PORT}`;
+const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'streamroom-e2e-'));
+const SHOTS = process.env.E2E_SHOTS || path.join(ROOT, 'test-results');
+fs.mkdirSync(SHOTS, { recursive: true });
+
+// Browsers only offer WebRTC candidates on real interfaces, so LiveKit must advertise one.
+const nodeIp = process.env.E2E_NODE_IP
+  || Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address
+  || '127.0.0.1';
+
+const procs = [];
+function start(name, cmd, args, env = {}) {
+  const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const log = fs.createWriteStream(path.join(SHOTS, `${name}.log`));
+  p.stdout.pipe(log); p.stderr.pipe(log);
+  p.on('exit', (code) => { if (!stopping) console.log(`[${name}] exited early (${code})`); });
+  procs.push(p);
+  return p;
+}
+let stopping = false;
+function stopAll() { stopping = true; procs.forEach((p) => p.kill()); }
+
+async function waitFor(fn, what, ms = 20000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    try { if (await fn()) return; } catch { /* not yet */ }
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+let failures = 0;
+let passes = 0;
+async function step(name, fn) {
+  const t = Date.now();
+  try {
+    await fn();
+    passes++;
+    console.log(`  ✓ ${name} (${Date.now() - t} ms)`);
+  } catch (e) {
+    failures++;
+    console.log(`  ✗ ${name}\n      ${String(e.message || e).split('\n').join('\n      ')}`);
+    throw e;
+  }
+}
+const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
+
+// Proxies would swallow localhost WebSockets.
+const noProxy = Object.fromEntries(Object.keys(process.env).filter((k) => /proxy/i.test(k)).map((k) => [k, '']));
+
+async function main() {
+  console.log(`LiveKit media address: ${nodeIp}; data: ${DATA}`);
+  start('livekit', process.env.LIVEKIT_BIN || 'livekit-server', ['--dev', '--bind', '0.0.0.0', '--node-ip', nodeIp]);
+  start('server', process.execPath, [path.join(ROOT, 'server/index.js')], {
+    PORT: String(PORT), DATA_DIR: DATA, PUBLIC_URL: BASE, APP_RELEASES_REPO: 'Saroknight/stream.eventworks', ...noProxy,
+  });
+  await waitFor(async () => (await fetch(`${BASE}/api/me`)).status === 401 || true, 'site');
+  await waitFor(async () => (await fetch('http://127.0.0.1:7880')).ok, 'LiveKit');
+
+  const adminLink = execFileSync(process.execPath, [path.join(ROOT, 'server/cli.js'), 'admin-link', BASE],
+    { env: { ...process.env, DATA_DIR: DATA } }).toString().match(/https?:\/\/\S+\/join\/\S+/)[0];
+
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROME_PATH || undefined,
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
+      '--auto-select-desktop-capture-source=Entire screen', '--no-proxy-server'],
+  });
+  const pageErrors = [];
+  async function newUser(w = 1280, h = 800, opts = {}) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, ...opts });
+    await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(String(e)));
+    return { ctx, page };
+  }
+
+  try {
+    const anon = await newUser();
+    await step('anonymous visitor sees the invite-only page', async () => {
+      await anon.page.goto(BASE);
+      await anon.page.waitForSelector('#welcome:not(.hidden)');
+    });
+
+    const admin = await newUser();
+    const a = admin.page;
+    await step('admin signs in with the admin link', async () => {
+      await a.goto(adminLink);
+      await a.waitForSelector('#go:not(.hidden)');
+      await a.fill('#name', 'Martin');
+      await a.click('#go');
+      await a.waitForSelector('#lobby:not(.hidden)');
+    });
+
+    let invite;
+    await step('admin creates an invite', async () => {
+      await a.goto(`${BASE}/admin`);
+      await a.fill('#inviteName', 'Alex');
+      await a.click('#inviteForm button');
+      await a.waitForSelector('#newLink:not(.hidden)');
+      invite = await a.inputValue('#newLinkUrl');
+      expect(invite.includes('/join/'), `unexpected invite link ${invite}`);
+    });
+
+    const friend = await newUser();
+    const f = friend.page;
+    await step('friend signs in with the invite', async () => {
+      await f.goto(invite);
+      await f.waitForSelector('#go:not(.hidden)');
+      await f.click('#go');
+      await f.waitForSelector('#lobby:not(.hidden)');
+    });
+
+    let roomUrl;
+    await step('friend starts a room', async () => {
+      await f.fill('#roomTitle', 'Test night');
+      await f.click('#startBtn');
+      await f.waitForURL('**/r/*');
+      roomUrl = f.url();
+      await f.waitForSelector('#liveBtn:not([disabled])', { timeout: 20000 });
+    });
+
+    await step('room shows in the admin lobby', async () => {
+      await a.goto(BASE);
+      await a.waitForSelector('.room-card', { timeout: 10000 });
+      expect((await a.innerText('.room-card')).includes('Test night'), 'room card missing title');
+    });
+
+    await step('Go Live hands the room to the app (streamroom:// link)', async () => {
+      // Its own tab: headless Chrome leaves the "open app?" prompt pending, which wedges the tab.
+      const p = await friend.ctx.newPage();
+      p.on('pageerror', (e) => pageErrors.push(String(e)));
+      await p.goto(roomUrl);
+      await p.waitForSelector('#liveBtn:not([disabled])', { timeout: 20000 });
+      await p.click('#liveBtn');
+      await p.waitForSelector('#goLive[open]');
+      const opened = [];
+      p.on('request', (r) => { if (r.url().startsWith('streamroom:')) opened.push(r.url()); });
+      await p.click('#appOpenBtn');
+      await waitFor(() => opened.length > 0, 'streamroom:// navigation', 8000);
+      expect(/^streamroom:\/\/open\?/.test(opened[0]), `bad deep link ${opened[0]}`);
+      // Opening the app must not drop the page from the room.
+      await p.waitForTimeout(1500);
+      expect(await p.isEnabled('#liveBtn'), 'room page disconnected after opening the app');
+      await p.screenshot({ path: path.join(SHOTS, 'golive.png') });
+      await p.close({ runBeforeUnload: false }).catch(() => {});
+    });
+
+    await step('friend streams from the browser and the admin sees it', async () => {
+      await f.click('#liveBtn');
+      await f.waitForSelector('#goLive[open]');
+      await f.click('#browserGo');
+      await f.waitForSelector('#liveBar:not(.hidden)', { timeout: 20000 }).catch(async (e) => {
+        await f.screenshot({ path: path.join(SHOTS, 'browser-golive-failed.png') });
+        throw new Error(`${e.message.split('\n')[0]}; dialog says: ${await f.innerText('#goErr').catch(() => '?')}`);
+      });
+      await a.goto(roomUrl);
+      await a.waitForSelector('.tile video', { timeout: 20000 });
+      await waitFor(() => a.$eval('.tile video', (v) => v.videoWidth > 0), 'video frames', 20000);
+      await a.screenshot({ path: path.join(SHOTS, 'room-viewer.png') });
+    });
+
+    await step('download page and app info API', async () => {
+      const r = await fetch(`${BASE}/api/app/latest`);
+      expect(r.ok, `/api/app/latest ${r.status}`);
+      await anon.page.goto(`${BASE}/download`);
+      await anon.page.waitForSelector('#dlBtn');
+      const dl = await fetch(`${BASE}/api/app/download`, { redirect: 'manual' });
+      expect(dl.status === 302, `/api/app/download ${dl.status}`);
+    });
+
+    await step('ending the room closes it for viewers', async () => {
+      await f.click('#liveBtn'); // stop browser stream
+      await f.waitForSelector('#endBtn:not(.hidden)');
+      await f.click('#endBtn');
+      await f.click('#endBtn'); // confirm
+      await a.waitForSelector('#overlay:not(.hidden)', { timeout: 10000 });
+      expect((await a.innerText('#overlayTitle')).includes('ended'), 'viewer did not see the room end');
+    });
+
+    await step('admin removes the friend, who is signed out', async () => {
+      await a.goto(`${BASE}/admin`);
+      const btn = a.locator('#people tr', { hasText: 'Alex' }).locator('button.danger');
+      await btn.click();
+      await btn.click();
+      await waitFor(async () => (await f.evaluate(() => fetch('/api/me').then((r) => r.status))) === 401, 'friend signed out', 8000);
+    });
+
+    await step('no script errors on any page', async () => {
+      expect(pageErrors.length === 0, pageErrors.join('\n'));
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
+main()
+  .catch(() => { failures = Math.max(failures, 1); })
+  .finally(() => {
+    stopAll();
+    console.log(`\n${passes} passed, ${failures} failed. Logs and screenshots: ${SHOTS}`);
+    process.exit(failures ? 1 : 0);
+  });
