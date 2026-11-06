@@ -101,6 +101,20 @@ jobs:
           ADMIN=$(sudo /usr/local/bin/streamroom-admin-link https://stream.test | grep -o 'https://stream.test/join/[^ ]*')
           node tests/relay.mjs https://stream.test "$ADMIN"
 
+      - name: Relay diagnostics
+        if: always()
+        run: |
+          echo "== TLS on 443 for the relay name"
+          echo | openssl s_client -connect turn.stream.test:443 -servername turn.stream.test -CAfile /tmp/caddy-root.crt 2>&1 | grep -E "subject=|issuer=|Verify return|alert|error" || true
+          echo "== TLS on 443 for the site"
+          echo | openssl s_client -connect stream.test:443 -servername stream.test -CAfile /tmp/caddy-root.crt 2>&1 | grep -E "subject=|Verify return" || true
+          echo "== listening"
+          sudo ss -ltnup | grep -E ":443|:5349|:3478|:7881|:7882|:8443" || true
+          echo "== livekit (turn / ice)"
+          sudo journalctl -u livekit --no-pager | grep -iE "turn|candidate|without connection|ice" | cut -c1-600 | tail -40 || true
+          echo "== caddy (layer4 / tls / errors)"
+          sudo journalctl -u caddy --no-pager | grep -iE "layer4|error|tls|handshake|proxy" | cut -c1-400 | tail -40 || true
+
       - name: Server logs
         if: always()
         run: |
