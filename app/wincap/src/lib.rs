@@ -4,7 +4,8 @@
 //! -> Media Foundation hardware H.264 encoder (NVENC / AMF / QuickSync behind one interface).
 //! Frames never leave the GPU until they are compressed.
 //!
-//! Audio: WASAPI loopback of the default output device (everything the PC plays).
+//! Audio: WASAPI loopback: everything the PC plays, everything except Discord, or only chosen
+//! apps (per-app process loopback on Windows 10 build 20348+ / Windows 11).
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -18,6 +19,18 @@ pub struct EncodedFrame {
     pub capture_unix_us: i64,
     /// Time from screen capture to encoder output.
     pub encode_latency_us: u32,
+}
+
+/// Which sound to share.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum AudioMode {
+    /// Everything the PC plays.
+    All,
+    /// Everything except Discord (so viewers don't hear voice chat echoed back).
+    #[default]
+    ExceptDiscord,
+    /// Only these apps (exe names, e.g. "eldenring.exe").
+    Apps(Vec<String>),
 }
 
 /// Interleaved 16-bit PCM, 10 ms per chunk.
@@ -130,7 +143,7 @@ mod encoder;
 mod pipeline;
 
 #[cfg(windows)]
-pub use audio::start_audio;
+pub use audio::{audio_apps, start_audio};
 #[cfg(windows)]
 pub use pipeline::start_video;
 
@@ -158,6 +171,12 @@ pub fn start_video(
 pub fn start_audio(
     _control: std::sync::Arc<Control>,
     _tx: std::sync::mpsc::SyncSender<AudioChunk>,
-) -> anyhow::Result<std::thread::JoinHandle<()>> {
+    _mode: AudioMode,
+) -> anyhow::Result<(std::thread::JoinHandle<()>, String)> {
     anyhow::bail!("audio capture is only available on Windows")
+}
+
+#[cfg(not(windows))]
+pub fn audio_apps() -> Vec<String> {
+    Vec::new()
 }

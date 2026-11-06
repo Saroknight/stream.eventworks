@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 pub use api::{Account, Api, Launch, SignedOut};
 pub use link::{AppLink, Joined};
-pub use wincap::{list_monitors, Control, Monitor, VideoInfo};
+pub use wincap::{audio_apps, list_monitors, AudioMode, Control, Monitor, VideoInfo};
 
 /// Call once at startup. Two TLS backends end up compiled in through different dependencies;
 /// without picking one, the first secure (wss://) connection panics.
@@ -47,12 +47,36 @@ pub struct Settings {
     /// Monitor index (see `list_monitors`), 0 = primary.
     pub monitor: u32,
     pub audio: bool,
+    /// Which sound to share: "except_discord" (default), "apps" (only `audio_apps`) or "all".
+    pub audio_mode: String,
+    /// Exe names for "apps", e.g. ["eldenring.exe"].
+    pub audio_apps: Vec<String>,
     pub cursor: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { height: 1080, fps: 60, bitrate_mbps: 8.0, monitor: 0, audio: true, cursor: true }
+        Self {
+            height: 1080,
+            fps: 60,
+            bitrate_mbps: 8.0,
+            monitor: 0,
+            audio: true,
+            audio_mode: "except_discord".into(),
+            audio_apps: Vec::new(),
+            cursor: true,
+        }
+    }
+}
+
+impl Settings {
+    pub fn audio_mode(&self) -> wincap::AudioMode {
+        match self.audio_mode.as_str() {
+            "all" => wincap::AudioMode::All,
+            "apps" if !self.audio_apps.is_empty() => wincap::AudioMode::Apps(self.audio_apps.clone()),
+            "apps" => wincap::AudioMode::All,
+            _ => wincap::AudioMode::ExceptDiscord,
+        }
     }
 }
 
@@ -220,13 +244,14 @@ impl Session {
             }
         })?);
 
-        // PC audio (everything the computer plays).
+        // PC audio: everything, everything except Discord, or only chosen apps.
         let mut audio = "off".to_string();
         if settings.audio && source == Source::Screen {
             let (audio_tx, audio_rx) = mpsc::sync_channel::<wincap::AudioChunk>(50);
-            match wincap::start_audio(control.clone(), audio_tx) {
-                Ok(handle) => {
+            match wincap::start_audio(control.clone(), audio_tx, settings.audio_mode()) {
+                Ok((handle, what)) => {
                     threads.push(handle);
+                    audio = what;
                     let source = NativeAudioSource::new(
                         AudioSourceOptions { echo_cancellation: false, noise_suppression: false, auto_gain_control: false },
                         48_000,
@@ -260,7 +285,6 @@ impl Session {
                             let _ = rt.block_on(source.capture_frame(&frame));
                         }
                     })?);
-                    audio = "PC audio".into();
                 }
                 Err(e) => {
                     log::info(&format!("audio not available: {e:#}"));

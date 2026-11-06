@@ -112,3 +112,7 @@ header .who .muted { display: block; overflow: hidden; text-overflow: ellipsis; 
 .paste summary { text-align: left; }
 .panel.paste { margin-top: 0; }
 .state[data-state="idle"] { text-align: left; }
+.settings label.full { display: block; margin-top: 4px; }
+.hint-line { margin: 6px 0 4px; }
+.apps { background: var(--panel-2); border-radius: 10px; padding: 8px 12px; margin: 6px 0 8px; }
+.apps-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }

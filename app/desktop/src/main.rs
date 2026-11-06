@@ -286,10 +286,15 @@ fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 fn load_settings(app: &AppHandle) -> Settings {
-    settings_path(app)
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let Some(text) = settings_path(app).and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Settings::default(); // new install: everything except Discord
+    };
+    let mut s: Settings = serde_json::from_str(&text).unwrap_or_default();
+    // Installs from before per-app audio keep sharing all PC audio until changed in Settings.
+    if !text.contains("\"audio_mode\"") {
+        s.audio_mode = "all".into();
+    }
+    s
 }
 
 // ---------- commands (called from the window) ----------
@@ -309,6 +314,12 @@ fn get_state(state: State<'_, AppState>) -> Snapshot {
         update: state.update.lock().unwrap().clone(),
         log_path: log::path().display().to_string(),
     }
+}
+
+/// Apps playing sound right now, for "Only these apps".
+#[tauri::command]
+async fn audio_apps() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(streamroom_core::audio_apps).await.unwrap_or_default()
 }
 
 /// A pasted link.
@@ -497,7 +508,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state, start_link, stop, restart, dismiss, save_settings, open_logs, check_update, install_update,
-            list_rooms, go_live, create_room, end_room, open_room, open_site, sign_out
+            list_rooms, go_live, create_room, end_room, open_room, open_site, sign_out, audio_apps
         ])
         .setup(|app| {
             let handle = app.handle().clone();

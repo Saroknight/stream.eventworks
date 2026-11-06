@@ -186,7 +186,53 @@ function renderSettings() {
     if (el.type === 'checkbox') el.checked = Boolean(v);
     else el.value = String(v);
   });
+  renderAudio();
 }
+
+// ---------- sound ----------
+const AUDIO_HINTS = {
+  except_discord: 'Viewers hear your game and videos, but not your Discord calls (so no echo).',
+  apps: 'Only the apps you tick below. They\'re picked up when they start.',
+  all: 'Everything your PC plays, including Discord.',
+  off: 'Viewers won\'t hear anything from your PC.',
+};
+function audioChoice() { return snap.settings.audio ? snap.settings.audio_mode || 'except_discord' : 'off'; }
+function renderAudio() {
+  const choice = audioChoice();
+  $('audioSel').value = choice;
+  $('audioHint').textContent = AUDIO_HINTS[choice];
+  $('appsBox').classList.toggle('hidden', choice !== 'apps');
+  if (choice === 'apps') renderApps();
+}
+let playing = [];
+async function refreshApps() {
+  try { playing = await invoke('audio_apps'); } catch { playing = []; }
+  renderApps();
+}
+function renderApps() {
+  const chosen = new Set(snap.settings.audio_apps || []);
+  const names = [...new Set([...playing, ...chosen])].sort();
+  $('appsList').replaceChildren(...(names.length ? names.map((n) => {
+    const box = h('input', { type: 'checkbox' });
+    box.checked = chosen.has(n);
+    box.onchange = () => {
+      const set = new Set(snap.settings.audio_apps || []);
+      if (box.checked) set.add(n); else set.delete(n);
+      snap.settings.audio_apps = [...set];
+      saveSettings();
+    };
+    return h('label.toggle', {}, box, ` ${n.replace(/\.exe$/i, '')}`, playing.includes(n) ? null : h('span.muted.small', {}, ' (not playing now)'));
+  }) : [h('p.muted.small', {}, 'Nothing is playing sound right now. Start your game, then click Refresh.')]));
+}
+$('audioSel').onchange = () => {
+  const v = $('audioSel').value;
+  snap.settings.audio = v !== 'off';
+  if (v !== 'off') snap.settings.audio_mode = v;
+  renderAudio();
+  if (v === 'apps') refreshApps();
+  saveSettings();
+};
+$('appsRefresh').onclick = refreshApps;
 
 async function saveSettings() {
   const s = { ...snap.settings };

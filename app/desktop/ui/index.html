@@ -136,7 +136,19 @@
           <select data-s="monitor" id="monitorSel"></select>
         </label>
       </div>
-      <label class="toggle"><input type="checkbox" data-s="audio"> Share PC audio</label>
+      <label class="full">Sound
+        <select id="audioSel">
+          <option value="except_discord">Everything except Discord (recommended)</option>
+          <option value="apps">Only certain apps</option>
+          <option value="all">All PC audio</option>
+          <option value="off">No sound</option>
+        </select>
+      </label>
+      <p class="muted small hint-line" id="audioHint"></p>
+      <div class="apps hidden" id="appsBox">
+        <div class="apps-head"><span class="muted small">Apps playing sound now</span><button class="link" id="appsRefresh" type="button">Refresh</button></div>
+        <div id="appsList"></div>
+      </div>
       <label class="toggle"><input type="checkbox" data-s="cursor"> Show mouse cursor</label>
       <div class="apply hidden" id="applyRow">
         <span class="muted small">Changes apply the next time you go live.</span>
