@@ -6,6 +6,7 @@ import { HOST, LIVEKIT_PUBLIC_URL, PORT, ROOT } from './config.js';
 import * as auth from './auth.js';
 import * as rooms from './rooms.js';
 import * as admin from './admin.js';
+import * as appinfo from './appinfo.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -20,7 +21,7 @@ app.use((_req, res, next) => {
 });
 
 app.use('/api', express.json({ limit: '10kb' }), auth.jsonOnly, auth.loadUser);
-app.use('/api', auth.router, rooms.router, admin.router);
+app.use('/api', auth.router, rooms.router, admin.router, appinfo.router);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 // eslint-disable-next-line no-unused-vars
 app.use('/api', (err, _req, res, _next) => {
@@ -35,6 +36,7 @@ app.get('/', page('index.html'));
 app.get('/join/:token', page('join.html'));
 app.get('/r/:id', page('room.html'));
 app.get('/admin', page('admin.html'));
+app.get('/download', page('download.html'));
 // Old links: /live/<room> is what the Windows app takes; opened in a browser, go to the room.
 app.get(['/live/:id', '/watch/:id'], (req, res) => res.redirect(`/r/${encodeURIComponent(req.params.id)}`));
 app.use(express.static(path.join(ROOT, 'public'), { index: false }));

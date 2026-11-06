@@ -7,17 +7,23 @@ use anyhow::{anyhow, Context, Result};
 use windows::core::Interface;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::*;
+use crate::cursor::{CursorPainter, CursorState};
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT, DXGI_FORMAT_NV12,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT, DXGI_FORMAT_NV12,
     DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 
 pub struct Converter {
+    device: ID3D11Device,
     context: ID3D11DeviceContext,
     vctx: ID3D11VideoContext,
     processor: ID3D11VideoProcessor,
+    /// Clean copy of the latest desktop image.
     staging: ID3D11Texture2D,
+    /// The image actually converted: staging plus the mouse cursor.
+    composite: ID3D11Texture2D,
     input_view: ID3D11VideoProcessorInputView,
+    painter: CursorPainter,
     outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
     next: usize,
     pub src_width: u32,
@@ -75,13 +81,14 @@ impl Converter {
 
             // Our own copy of the desktop image, so the duplication frame can be released immediately.
             let staging = texture(device, sw, sh, sfmt, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)?;
+            let composite = texture(device, sw, sh, sfmt, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)?;
             let in_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
                 FourCC: 0,
                 ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
                 Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPIV { MipSlice: 0, ArraySlice: 0 } },
             };
             let mut input_view = None;
-            vdev.CreateVideoProcessorInputView(&staging, &enumerator, &in_desc, Some(&mut input_view))
+            vdev.CreateVideoProcessorInputView(&composite, &enumerator, &in_desc, Some(&mut input_view))
                 .context("CreateVideoProcessorInputView")?;
             let input_view = input_view.ok_or_else(|| anyhow!("no input view"))?;
 
@@ -122,11 +129,14 @@ impl Converter {
             vctx.VideoProcessorSetOutputBackgroundColor(&processor, true, &black);
 
             Ok(Self {
+                device: device.clone(),
                 context: context.clone(),
                 vctx,
                 processor,
                 staging,
+                composite,
                 input_view,
+                painter: CursorPainter::default(),
                 outputs,
                 next: 0,
                 src_width: sw,
@@ -141,8 +151,15 @@ impl Converter {
         unsafe { self.context.CopyResource(&self.staging, desktop) };
     }
 
-    /// Converts the staged image into the next NV12 output texture and returns it.
-    pub fn convert_staged(&mut self) -> Result<ID3D11Texture2D> {
+    /// Converts the staged image (plus the cursor, if given) into the next NV12 output texture.
+    pub fn convert_staged(&mut self, cursor: Option<&CursorState>) -> Result<ID3D11Texture2D> {
+        unsafe { self.context.CopyResource(&self.composite, &self.staging) };
+        if let Some(c) = cursor {
+            // BGRA only (desktop duplication always gives BGRA). A cursor failure never stops the stream.
+            if self.src_format == DXGI_FORMAT_B8G8R8A8_UNORM {
+                let _ = self.painter.draw(&self.device, &self.context, &self.composite, (self.src_width, self.src_height), c);
+            }
+        }
         let (out_tex, out_view) = &self.outputs[self.next];
         self.next = (self.next + 1) % self.outputs.len();
         unsafe {

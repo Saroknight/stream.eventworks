@@ -1,27 +1,20 @@
-[package]
-name = "streamroom-live"
-version = "0.1.0"
-edition = "2021"
-description = "Native screen streaming for Streamroom: hardware capture and encoding, published to LiveKit"
-
 [workspace]
-members = [".", "wincap"]
+resolver = "2"
+members = ["core", "wincap", "cli", "desktop"]
 
-[features]
-# Software test-pattern source (OpenH264). For testing the publishing path without a GPU.
-testsrc = ["dep:openh264"]
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1"
 livekit = { version = "0.10", default-features = false, features = ["native", "rustls-tls-webpki-roots"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 url = "2"
-wincap = { path = "wincap" }
-openh264 = { version = "0.9", optional = true }
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 
 [profile.release]
 lto = "thin"

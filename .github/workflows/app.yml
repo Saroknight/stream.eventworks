@@ -1,15 +1,24 @@
 name: Windows app
 
+# Every push that touches the app builds the installer (download it from the run's artifacts).
+# Pushing a tag like app-v0.2.1 also publishes a GitHub Release, which is what the site's
+# /download page and the app's auto-updater point at.
+
 on:
   push:
     paths:
       - "app/**"
       - ".github/workflows/app.yml"
+    tags:
+      - "app-v*"
   workflow_dispatch:
 
 concurrency:
   group: app-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   windows:
@@ -22,25 +31,61 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
 
-      - name: Unit tests
-        run: cargo test --features testsrc --bins
+      - name: Version check (tags only)
+        if: startsWith(github.ref, 'refs/tags/app-v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".Substring(5)
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($tag -ne $ver) { throw "Tag $tag does not match Cargo.toml version $ver" }
 
-      - name: Build
-        run: cargo build --release --features testsrc
+      - name: Unit tests
+        run: cargo test -p streamroom-core -p streamroom-desktop
+
+      - name: Build installer
+        working-directory: app/desktop
+        run: npx --yes @tauri-apps/cli@2 build --ci
+
+      - name: Build command-line tool
+        run: cargo build --release -p streamroom-cli --features testsrc
 
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/streamroom-live.exe dist/
-          Copy-Item README.md dist/
+          $setup = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "installer not found" }
+          Copy-Item $setup.FullName dist/Streamroom-Live-Setup.exe
+          Copy-Item target/release/streamroom-live-cli.exe dist/
+          Push-Location dist
+          Get-ChildItem -File | Where-Object Name -ne SHA256SUMS | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content -Encoding ascii SHA256SUMS
+          Get-Content SHA256SUMS
+          Pop-Location
 
       - uses: actions/upload-artifact@v4
         with:
           name: streamroom-live-windows
           path: app/dist/
           retention-days: 30
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/app-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".Substring(5)
+          gh release create "${{ github.ref_name }}" dist/Streamroom-Live-Setup.exe dist/SHA256SUMS dist/streamroom-live-cli.exe `
+            --title "Streamroom Live $ver" `
+            --notes "Download **Streamroom-Live-Setup.exe** below and run it. Windows may say it protected your PC: click **More info**, then **Run anyway**. Installed copies update themselves." `
+            --latest

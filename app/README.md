@@ -3,22 +3,39 @@
 Streams your screen into a Streamroom room using your graphics card, for much smoother
 frame rates than browser screen sharing.
 
+## Install
+
+Download **Streamroom-Live-Setup.exe** from the site's `/download` page (or this repo's
+latest GitHub Release) and run it. It installs per-user, so no admin prompt. Windows SmartScreen
+may warn that the app is unrecognized (it isn't code-signed): click **More info → Run anyway**.
+
 ## Use it
 
-1. In a room, click **Go Live**, then **Copy app link**.
-2. Run `streamroom-live.exe` and paste the link when asked, or pass it directly:
+In a room, click **Go Live**, then **Open the app**. The browser hands the room to the app
+through the `streamroom://` link the installer registers, and you're live under your
+account's name. The window shows LIVE status, frame rates, bitrate and a Stop button.
+Closing it keeps you live (the app stays in the tray); right-click the tray icon to stop.
 
-   ```
-   streamroom-live.exe "https://stream.example.com/live/ROOM#k=KEY"
-   ```
+Settings (quality, frame rate, bitrate, screen, PC audio, mouse cursor) are saved and can be
+applied mid-stream. **Copy diagnostics** at the bottom copies everything useful for a bug report.
 
-3. You're live, under your account's name. A status line shows capture and sent frame rates,
-   bitrate and encoding time. Press Ctrl+C to stop.
+The app checks GitHub Releases for updates and shows **Update now** when one is out (never
+mid-stream). Updates are verified against the release's `SHA256SUMS` before they run.
 
-Windows SmartScreen may warn that the app is unrecognized (it isn't code-signed):
-click **More info → Run anyway**.
+## Layout
 
-## Options
+| Folder | What |
+|---|---|
+| `wincap/` | Windows capture, cursor drawing, GPU conversion and hardware encoding |
+| `core/` | Joining a room from an app link and publishing the stream |
+| `desktop/` | The Tauri app: window (`ui/`), tray, deep links, updater, installer config |
+| `cli/` | `streamroom-live-cli.exe`, the same engine from a terminal (troubleshooting) |
+
+## Command-line tool
+
+```
+streamroom-live-cli.exe "https://stream.example.com/live/ROOM#k=KEY" [options]
+```
 
 | Option | Meaning |
 |---|---|
@@ -27,7 +44,14 @@ click **More info → Run anyway**.
 | `--bitrate 8` | Video bitrate in Mbps |
 | `--monitor 0` | Which monitor (0 = primary) |
 | `--no-audio` | Don't share PC audio |
+| `--no-cursor` | Don't draw the mouse cursor |
+| `--list-monitors` | List monitors and exit |
 | `--test-pattern` | Send a test pattern instead of the screen (troubleshooting) |
+
+## Releasing
+
+Bump `version` in `app/Cargo.toml`, push, then push a tag `app-vX.Y.Z` with the same version.
+The **Windows app** workflow builds the installer and publishes the release.
 
 ## How it works
 

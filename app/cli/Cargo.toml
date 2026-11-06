@@ -1,0 +1,17 @@
+[package]
+name = "streamroom-cli"
+version.workspace = true
+edition.workspace = true
+description = "Console version of Streamroom Live (for troubleshooting and testing)"
+
+[[bin]]
+name = "streamroom-live-cli"
+path = "src/main.rs"
+
+[features]
+testsrc = ["streamroom-core/testsrc"]
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+streamroom-core = { path = "../core" }

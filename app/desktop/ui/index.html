@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Streamroom Live</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="update hidden" id="update">
+    <span id="updateText"></span>
+    <button class="btn sm primary" id="updateBtn">Update now</button>
+  </div>
+
+  <header>
+    <img src="logo.png" alt="" class="logo">
+    <div>
+      <b>Streamroom Live</b>
+      <span class="muted" id="version"></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- idle -->
+    <section class="panel state" data-state="idle">
+      <div class="ready-dot"></div>
+      <h1>Ready when you are</h1>
+      <p class="muted">In a Streamroom room, click <b>Go Live</b>, then <b>Open the app</b>. Streaming starts right away.</p>
+      <details class="paste">
+        <summary>Have an app link? Paste it</summary>
+        <form id="pasteForm" class="row">
+          <input id="pasteInput" type="text" placeholder="https://…/live/…#k=…" autocomplete="off" spellcheck="false">
+          <button class="btn" type="submit">Go live</button>
+        </form>
+      </details>
+    </section>
+
+    <!-- connecting -->
+    <section class="panel state hidden" data-state="connecting">
+      <div class="spinner"></div>
+      <h1>Connecting…</h1>
+      <p class="muted" id="connectingTo"></p>
+    </section>
+
+    <!-- live -->
+    <section class="panel state hidden" data-state="live">
+      <div class="live-head">
+        <span class="live-badge">LIVE</span>
+        <span class="timer" id="timer">0:00</span>
+      </div>
+      <h1 id="roomTitle"></h1>
+      <div class="stats">
+        <div><span id="sSent">–</span><small>fps sent</small></div>
+        <div><span id="sCap">–</span><small>fps captured</small></div>
+        <div><span id="sMbps">–</span><small>Mbps</small></div>
+        <div><span id="sEnc">–</span><small>ms encode</small></div>
+      </div>
+      <p class="muted small" id="details"></p>
+      <p class="muted small hint hidden" id="stillHint">Frame rate follows the screen: a still screen sends fewer frames.</p>
+      <button class="btn big stop" id="stopBtn">Stop streaming</button>
+      <p class="muted small center">Closing this window keeps you live. Find Streamroom Live in the tray.</p>
+    </section>
+
+    <!-- ended / error -->
+    <section class="panel state hidden" data-state="ended">
+      <div class="ended-icon">■</div>
+      <h1 id="endedTitle">Stream ended</h1>
+      <p class="muted" id="endedText"></p>
+      <div class="row">
+        <button class="btn hidden" id="retryBtn">Try again</button>
+        <button class="btn primary" id="okBtn">OK</button>
+      </div>
+    </section>
+
+    <!-- settings -->
+    <details class="panel settings" id="settings">
+      <summary>Settings</summary>
+      <div class="grid">
+        <label>Quality
+          <select data-s="height">
+            <option value="0">Native (screen size)</option>
+            <option value="1440">1440p</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+          </select>
+        </label>
+        <label>Frame rate
+          <select data-s="fps">
+            <option value="60">60 fps</option>
+            <option value="30">30 fps</option>
+          </select>
+        </label>
+        <label>Bitrate
+          <select data-s="bitrate_mbps">
+            <option value="4">4 Mbps (slow internet)</option>
+            <option value="6">6 Mbps</option>
+            <option value="8">8 Mbps (recommended)</option>
+            <option value="12">12 Mbps</option>
+            <option value="16">16 Mbps (sharpest)</option>
+          </select>
+        </label>
+        <label>Screen
+          <select data-s="monitor" id="monitorSel"></select>
+        </label>
+      </div>
+      <label class="toggle"><input type="checkbox" data-s="audio"> Share PC audio</label>
+      <label class="toggle"><input type="checkbox" data-s="cursor"> Show mouse cursor</label>
+      <div class="apply hidden" id="applyRow">
+        <span class="muted small">Changes apply the next time you go live.</span>
+        <button class="btn sm" id="applyBtn">Apply now</button>
+      </div>
+    </details>
+  </main>
+
+  <footer>
+    <button class="link" id="logBtn">Open log</button>
+    <span>·</span>
+    <button class="link" id="diagBtn">Copy diagnostics</button>
+  </footer>
+
+  <div class="toast hidden" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

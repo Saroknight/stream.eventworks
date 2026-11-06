@@ -1,0 +1,24 @@
+[package]
+name = "streamroom-desktop"
+version.workspace = true
+edition.workspace = true
+description = "Streamroom Live: stream your screen into Streamroom with your graphics card"
+
+[[bin]]
+name = "streamroom-live"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+sha2 = "0.10"
+streamroom-core = { path = "../core" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }

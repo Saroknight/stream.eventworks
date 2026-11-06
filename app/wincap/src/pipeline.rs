@@ -175,11 +175,15 @@ fn run_inner(
             let wait = if enc.need_input == 0 { Duration::from_millis(1) } else { (next_due - now).min(Duration::from_millis(2)) };
             // Meanwhile keep the newest desktop image so we never send a stale one.
             if !wait.is_zero() {
-                if let Grab::Frame(tex) = dup.acquire(wait.as_millis().max(1) as u32)? {
-                    stage_checked(&mut conv, &gpu, &tex, fps)?;
-                    dup.release();
-                    have_fresh = true;
-                    stats.captured.fetch_add(1, Ordering::Relaxed);
+                match dup.acquire(wait.as_millis().max(1) as u32)? {
+                    Grab::Frame(tex) => {
+                        stage_checked(&mut conv, &gpu, &tex, fps)?;
+                        dup.release();
+                        have_fresh = true;
+                        stats.captured.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Grab::Cursor if opts.cursor => have_fresh = true,
+                    _ => {}
                 }
             }
             continue;
@@ -195,14 +199,15 @@ fn run_inner(
                     have_fresh = true;
                     stats.captured.fetch_add(1, Ordering::Relaxed);
                 }
-                Grab::Nothing | Grab::Lost => {}
+                Grab::Cursor if opts.cursor => have_fresh = true,
+                _ => {}
             }
         }
 
         let keyframe = control.keyframe_requested.swap(false, Ordering::Relaxed);
         let still_due = last_submit.elapsed() >= STILL_RESEND;
         if have_fresh {
-            last_nv12 = Some(conv.convert_staged()?);
+            last_nv12 = Some(conv.convert_staged(if opts.cursor { Some(&dup.cursor) } else { None })?);
         }
         if have_fresh || keyframe || still_due {
             if let Some(tex) = &last_nv12 {

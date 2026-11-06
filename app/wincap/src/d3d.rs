@@ -1,4 +1,4 @@
-//! D3D11 device on the GPU that drives the chosen monitor.
+//! Monitors, and a D3D11 device on the GPU that drives the chosen monitor.
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::Interface;
@@ -9,6 +9,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1, DXGI_OUTPUT_DESC};
+
+use crate::Monitor;
 
 pub struct Gpu {
     pub device: ID3D11Device,
@@ -23,12 +25,12 @@ fn wide(s: &[u16]) -> String {
     String::from_utf16_lossy(&s[..end])
 }
 
-pub fn open(monitor: u32) -> Result<Gpu> {
+/// Every monitor attached to the desktop, on every GPU. Primary monitor (at 0,0) first, then
+/// left to right. The index into this list is the `monitor` option.
+fn outputs() -> Result<Vec<(IDXGIAdapter1, IDXGIOutput, DXGI_OUTPUT_DESC)>> {
     unsafe {
         let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
-
-        // Every monitor attached to the desktop, on every GPU. Primary monitor (at 0,0) first.
-        let mut outputs: Vec<(IDXGIAdapter1, IDXGIOutput, DXGI_OUTPUT_DESC)> = Vec::new();
+        let mut outputs = Vec::new();
         let mut ai = 0;
         while let Ok(adapter) = factory.EnumAdapters1(ai) {
             let mut oi = 0;
@@ -42,17 +44,45 @@ pub fn open(monitor: u32) -> Result<Gpu> {
             }
             ai += 1;
         }
-        if outputs.is_empty() {
-            return Err(anyhow!("no monitors found"));
-        }
         outputs.sort_by_key(|(_, _, d)| {
             let r = d.DesktopCoordinates;
             (!(r.left == 0 && r.top == 0), r.left, r.top)
         });
-        let index = (monitor as usize).min(outputs.len() - 1);
-        let (adapter, output, _desc) = outputs.swap_remove(index);
-        let adesc = adapter.GetDesc1().context("adapter GetDesc1")?;
+        Ok(outputs)
+    }
+}
 
+pub fn list_monitors() -> Vec<Monitor> {
+    outputs()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, (adapter, _, d))| {
+            let r = d.DesktopCoordinates;
+            let device = wide(&d.DeviceName);
+            let number = device.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string();
+            let gpu = unsafe { adapter.GetDesc1() }.map(|a| wide(&a.Description)).unwrap_or_default();
+            Monitor {
+                index: i as u32,
+                name: if number.is_empty() { format!("Display {}", i + 1) } else { format!("Display {number}") },
+                width: (r.right - r.left) as u32,
+                height: (r.bottom - r.top) as u32,
+                primary: r.left == 0 && r.top == 0,
+                gpu,
+            }
+        })
+        .collect()
+}
+
+pub fn open(monitor: u32) -> Result<Gpu> {
+    let mut outputs = outputs()?;
+    if outputs.is_empty() {
+        return Err(anyhow!("no monitors found"));
+    }
+    let index = (monitor as usize).min(outputs.len() - 1);
+    let (adapter, output, _desc) = outputs.swap_remove(index);
+    unsafe {
+        let adesc = adapter.GetDesc1().context("adapter GetDesc1")?;
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
         D3D11CreateDevice(

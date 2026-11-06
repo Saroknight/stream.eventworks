@@ -1,0 +1,21 @@
+[package]
+name = "streamroom-core"
+version.workspace = true
+edition.workspace = true
+description = "Streamroom Live engine: app links, sign-in ticket, capture/encode session published to LiveKit"
+
+[features]
+# Software test-pattern source (OpenH264), for testing without a GPU or on Linux.
+testsrc = ["dep:openh264"]
+
+[dependencies]
+anyhow.workspace = true
+livekit.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+wincap = { path = "../wincap" }
+openh264 = { version = "0.9", optional = true }

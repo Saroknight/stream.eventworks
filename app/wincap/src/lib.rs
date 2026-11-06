@@ -33,17 +33,29 @@ pub struct VideoOptions {
     pub height: u32,
     pub fps: u32,
     pub bitrate_bps: u32,
-    /// Monitor index, 0 = primary.
+    /// Monitor index, 0 = primary (see `list_monitors`).
     pub monitor: u32,
+    /// Draw the mouse cursor into the stream.
+    pub cursor: bool,
 }
 
 impl Default for VideoOptions {
     fn default() -> Self {
-        Self { height: 1080, fps: 60, bitrate_bps: 8_000_000, monitor: 0 }
+        Self { height: 1080, fps: 60, bitrate_bps: 8_000_000, monitor: 0, cursor: true }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Monitor {
+    pub index: u32,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+    pub gpu: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct VideoInfo {
     pub adapter: String,
     pub encoder: String,
@@ -107,6 +119,8 @@ mod audio;
 #[cfg(windows)]
 mod capture;
 #[cfg(windows)]
+mod cursor;
+#[cfg(windows)]
 mod convert;
 #[cfg(windows)]
 mod d3d;
@@ -119,6 +133,17 @@ mod pipeline;
 pub use audio::start_audio;
 #[cfg(windows)]
 pub use pipeline::start_video;
+
+/// Monitors in the order the `monitor` option uses (primary first).
+#[cfg(windows)]
+pub fn list_monitors() -> Vec<Monitor> {
+    d3d::list_monitors()
+}
+
+#[cfg(not(windows))]
+pub fn list_monitors() -> Vec<Monitor> {
+    Vec::new()
+}
 
 #[cfg(not(windows))]
 pub fn start_video(
