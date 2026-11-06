@@ -1,0 +1,46 @@
+name: Windows app
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - ".github/workflows/app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Unit tests
+        run: cargo test --features testsrc --bins
+
+      - name: Build
+        run: cargo build --release --features testsrc
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/streamroom-live.exe dist/
+          Copy-Item README.md dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streamroom-live-windows
+          path: app/dist/
+          retention-days: 30
