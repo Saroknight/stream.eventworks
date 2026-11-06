@@ -5,14 +5,14 @@ frame rates than browser screen sharing.
 
 ## Use it
 
-1. On the Go Live page, copy your **streamer link** (the one containing `/live/`).
+1. In a room, click **Go Live**, then **Copy app link**.
 2. Run `streamroom-live.exe` and paste the link when asked, or pass it directly:
 
    ```
    streamroom-live.exe "https://stream.example.com/live/ROOM#k=KEY"
    ```
 
-3. Type your name. You're live. A status line shows capture and sent frame rates,
+3. You're live, under your account's name. A status line shows capture and sent frame rates,
    bitrate and encoding time. Press Ctrl+C to stop.
 
 Windows SmartScreen may warn that the app is unrecognized (it isn't code-signed):
@@ -27,7 +27,6 @@ click **More info → Run anyway**.
 | `--bitrate 8` | Video bitrate in Mbps |
 | `--monitor 0` | Which monitor (0 = primary) |
 | `--no-audio` | Don't share PC audio |
-| `--name NAME` | Name shown to viewers |
 | `--test-pattern` | Send a test pattern instead of the screen (troubleshooting) |
 
 ## How it works

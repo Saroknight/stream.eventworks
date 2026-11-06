@@ -2,9 +2,10 @@
 # shellcheck disable=SC2016  # backticks in --query strings are JMESPath literals
 # Streamroom on Amazon Lightsail, run from AWS CloudShell.
 #
-# 1. Open CloudShell in the AWS console and upload streamroom.zip (Actions > Upload file).
-# 2. Run:
-#      unzip -oq streamroom.zip && bash streamroom/deploy/aws/lightsail.sh
+# Open CloudShell in the AWS console and run (this pulls the latest code from GitHub):
+#
+#   rm -rf stream.eventworks && git clone -q --depth 1 https://github.com/Saroknight/stream.eventworks \
+#     && DOMAIN=stream.example.com bash stream.eventworks/deploy/aws/lightsail.sh
 #
 # Settings (optional, put them before the command, e.g. REGION=us-west-2 bash ...):
 #   REGION   AWS region for the server              (default: CloudShell's region, else us-east-1)
@@ -21,14 +22,15 @@ REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
 NAME="${NAME:-streamroom}"
 IPNAME="${NAME}-ip"
 PLAN_GB="${PLAN_GB:-2}"
-ZIP="${ZIP:-$HOME/streamroom.zip}"
+# The code to deploy: the checkout this script lives in.
+SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 KEY="$HOME/.ssh/lightsail-${REGION}.pem"
 export AWS_DEFAULT_REGION="$REGION" AWS_PAGER=""
 
 say() { printf '\n\033[1;31m●\033[0m %s\n' "$*"; }
 ls_() { aws lightsail "$@"; }
 
-[[ -f "$ZIP" ]] || { echo "Can't find $ZIP. Upload streamroom.zip to CloudShell first (Actions > Upload file)." >&2; exit 1; }
+[[ -f "$SRC/server/index.js" && -f "$SRC/deploy/linux/setup.sh" ]] || { echo "Run this from a checkout of the Streamroom repository." >&2; exit 1; }
 command -v jq >/dev/null || sudo yum install -y -q jq
 
 say "Using region $REGION"
@@ -121,13 +123,16 @@ fi
 
 # ---- 6. copy app and run setup ----
 say "Copying Streamroom to the server"
-scp -q -i "$KEY" -o StrictHostKeyChecking=accept-new "$ZIP" "ubuntu@$IP:streamroom.zip"
+BUNDLE="$(mktemp --suffix=.tgz)"
+# Web app and server only: the Windows app source and local data stay behind.
+tar -czf "$BUNDLE" -C "$SRC" --exclude=./.git --exclude=./app --exclude=./node_modules --exclude=./data --exclude=./.env .
+scp -q -i "$KEY" -o StrictHostKeyChecking=accept-new "$BUNDLE" "ubuntu@$IP:streamroom.tgz"
+rm -f "$BUNDLE"
 
 say "Installing on the server (takes a few minutes the first time)"
 "${SSH[@]}" "set -e
   cloud-init status --wait >/dev/null 2>&1 || true
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q unzip >/dev/null
-  rm -rf ~/streamroom && unzip -oq ~/streamroom.zip -d ~
+  rm -rf ~/streamroom && mkdir ~/streamroom && tar -xzf ~/streamroom.tgz -C ~/streamroom
   sudo bash ~/streamroom/deploy/linux/setup.sh '$DOMAIN'"
 
 # ---- 7. check ----

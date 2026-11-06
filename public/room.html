@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Room · Streamroom</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ff4d5e%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="viewer">
+    <header class="topbar">
+      <a class="brand" href="/" title="Back to the lobby"><span class="dot"></span><span class="back">Lobby</span></a>
+      <span class="title" id="title">Connecting…</span>
+      <span class="count" id="count"></span>
+      <div class="layouts" role="group" aria-label="Layout">
+        <button data-layout="grid" title="Grid (G)">Grid</button>
+        <button data-layout="spotlight" title="Spotlight (S)">Spotlight</button>
+        <button data-layout="pip" title="Picture in picture (P)">PiP</button>
+      </div>
+      <button class="btn sm" id="muteAll" title="Mute all (M)">🔊</button>
+      <button class="btn sm" id="statsBtn" title="Show detailed stats and copy diagnostics">Stats</button>
+      <button class="btn sm" id="fsAll" title="Fullscreen">⛶</button>
+      <button class="btn sm danger hidden" id="endBtn">End room</button>
+      <button class="btn sm primary" id="liveBtn" disabled>● Go Live</button>
+    </header>
+
+    <!-- shown while you stream from this browser -->
+    <div class="livebar hidden" id="liveBar">
+      <span class="live-badge">LIVE</span>
+      <span class="stats" id="liveStats"></span>
+      <span class="hint" id="encInfo"></span>
+      <span class="hint" id="audioNote"></span>
+      <span class="spacer"></span>
+      <button class="btn sm" id="switchBtn">Change</button>
+      <button class="btn sm ghost" id="diagBtn">Copy diagnostics</button>
+      <button class="btn sm primary" id="stopBtn">Stop</button>
+      <p class="hint warn hidden" id="perfNote"></p>
+    </div>
+
+    <main class="stage grid" id="stage">
+      <div class="empty" id="empty"><div><b>Nobody is live yet</b>Click <b>Go Live</b> to share your screen, or wait for someone else.</div></div>
+    </main>
+  </div>
+  <button class="btn primary audio-gate hidden" id="audioGate">🔊 Click to turn on sound</button>
+
+  <!-- Go Live: app (best) or browser (quick) -->
+  <dialog class="sheet" id="goLive">
+    <div class="sheet-head">
+      <h2>Go live</h2>
+      <button class="btn sm ghost" id="goClose" aria-label="Close">✕</button>
+    </div>
+
+    <section class="choice">
+      <div>
+        <h3>🎮 Streamroom Live app <span class="badge ok">best for games</span></h3>
+        <p class="hint">Uses your graphics card for smooth 60 fps. Windows only.</p>
+        <ol class="steps">
+          <li>Copy your app link.</li>
+          <li>Open <b>Streamroom Live</b> and paste it.</li>
+        </ol>
+        <p class="hint">The link signs the app in as you for 12 hours, so keep it to yourself.</p>
+      </div>
+      <button class="btn primary" id="appLinkBtn">Copy app link</button>
+    </section>
+
+    <section class="choice">
+      <div>
+        <h3>🌐 This browser <span class="badge">quick, no install</span></h3>
+        <p class="hint" id="browserNote">Works in Chrome or Edge. Lower frame rates than the app.</p>
+        <div class="seg" id="modeSeg">
+          <button type="button" data-mode="motion" aria-pressed="true">🎮 Game or video<small>Smooth, 60 fps</small></button>
+          <button type="button" data-mode="detail" aria-pressed="false">📝 Text or code<small>Sharpest picture</small></button>
+        </div>
+      </div>
+      <button class="btn primary" id="browserGo">Share my screen</button>
+    </section>
+
+    <details class="help adv" id="adv">
+      <summary>Browser streaming options</summary>
+      <div class="adv-grid">
+        <label>Resolution<select data-adv="res">
+          <option value="auto">Auto</option><option value="native">Native (no scaling)</option>
+          <option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option>
+        </select></label>
+        <label>Frame rate<select data-adv="fps">
+          <option value="auto">Auto</option><option value="60">60 fps</option><option value="30">30 fps</option>
+        </select></label>
+        <label>Quality layers<select data-adv="layers">
+          <option value="auto">Auto (on)</option><option value="off">Off</option>
+        </select></label>
+        <label>Codec<select data-adv="codec">
+          <option value="auto">Auto</option><option value="h264">H.264</option><option value="vp8">VP8</option>
+          <option value="vp9">VP9</option><option value="av1">AV1</option>
+        </select></label>
+        <label>When struggling<select data-adv="degrade">
+          <option value="auto">Auto</option><option value="maintain-framerate">Keep frame rate</option>
+          <option value="maintain-resolution">Keep sharpness</option><option value="balanced">Balance both</option>
+        </select></label>
+        <label>Max bitrate<select data-adv="bitrate">
+          <option value="auto">Auto</option><option value="3">3 Mbps</option><option value="5">5 Mbps</option>
+          <option value="8">8 Mbps</option><option value="12">12 Mbps</option>
+        </select></label>
+      </div>
+      <div class="row-actions">
+        <button type="button" class="btn sm" id="advReset">Reset to Auto</button>
+        <button type="button" class="btn sm" id="tuneBtn">🔍 Find the best settings</button>
+      </div>
+      <p class="hint">The test streams privately for about 45 seconds. Start your game first and keep it moving.</p>
+      <div id="tuneOut" class="hidden">
+        <p class="hint" id="tuneStatus"></p>
+        <table class="tune-table" id="tuneTable"></table>
+      </div>
+      <ul class="tips">
+        <li>For game sound on Windows, share <b>Entire screen</b> and tick <b>Share system audio</b>.</li>
+        <li>If a fullscreen game shows black, switch it to <b>borderless windowed</b>.</li>
+      </ul>
+    </details>
+    <div class="error" id="goErr"></div>
+  </dialog>
+
+  <!-- room ended / removed -->
+  <div class="overlay hidden" id="overlay">
+    <div class="card">
+      <h1 id="overlayTitle">This room has ended</h1>
+      <p class="lead" id="overlayText">Head back to the lobby to find another one.</p>
+      <div class="row-actions">
+        <a class="btn primary" href="/">Back to the lobby</a>
+        <button class="btn hidden" id="rejoinBtn">Reconnect</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/room.js"></script>
+</body>
+</html>

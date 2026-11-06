@@ -37,10 +37,9 @@ struct Args {
 
 const HELP: &str = "Streamroom Live: stream your screen into a Streamroom room
 
-Usage: streamroom-live [STREAMER_LINK] [options]
+Usage: streamroom-live [APP_LINK] [options]
 
 Options:
-  --name NAME        Name shown to viewers (asked for if missing)
   --height N         Output height: 1080 (default), 720, 1440, or 0 for native
   --fps N            Frame rate (default 60)
   --bitrate MBPS     Video bitrate in Mbps (default 8)
@@ -173,14 +172,11 @@ async fn run() -> Result<()> {
 
     let link_text = match args.link {
         Some(l) => l,
-        None => prompt("Paste your streamer link", None)?,
+        None => prompt("Paste your app link (Go Live → Copy app link)", None)?,
     };
     let link = link::parse(&link_text)?;
-    let default_name = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "Streamer".into());
-    let name = match args.name {
-        Some(n) => n,
-        None => prompt("Your name", Some(&default_name))?,
-    };
+    // Streamroom uses the name on your account; this is only sent for older servers.
+    let name = args.name.unwrap_or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "Streamer".into()));
 
     print!("Connecting to {} ... ", link.base);
     std::io::stdout().flush()?;

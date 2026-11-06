@@ -31,14 +31,14 @@ pub fn parse(input: &str) -> Result<StreamerLink> {
     let mut segs = url.path_segments().ok_or_else(|| anyhow!("link has no path"))?;
     let room_id = match (segs.next(), segs.next()) {
         (Some("live"), Some(id)) if !id.is_empty() => id.to_string(),
-        (Some("watch"), _) => bail!("that's a viewer link. Use the streamer link (it contains /live/)."),
-        _ => bail!("not a Streamroom streamer link (expected .../live/<room>#k=...)"),
+        (Some("watch") | Some("r"), _) => bail!("that's a room link. In the room, click Go Live, then Copy app link."),
+        _ => bail!("that isn't a Streamroom app link. In the room, click Go Live, then Copy app link."),
     };
     let stream_key = url
         .fragment()
         .and_then(|f| f.split('&').find_map(|kv| kv.strip_prefix("k=")))
         .filter(|k| !k.is_empty())
-        .ok_or_else(|| anyhow!("the link is missing its streamer key (the part after #k=). Copy the full link."))?
+        .ok_or_else(|| anyhow!("the link is incomplete (missing the part after #k=). Copy it again with Copy app link."))?
         .to_string();
     Ok(StreamerLink { base, room_id, stream_key })
 }

@@ -55,7 +55,7 @@ id streamroom >/dev/null 2>&1 || useradd --system --no-create-home --user-group 
 
 say "Copying app to $APP"
 mkdir -p "$APP"
-rsync -a --delete --exclude node_modules --exclude data --exclude .env --exclude .git "$SRC/" "$APP/"
+rsync -a --delete --exclude node_modules --exclude data --exclude .env --exclude .git --exclude app "$SRC/" "$APP/"
 (cd "$APP" && npm ci --omit=dev --no-audit --no-fund)
 
 # ---- secrets: generate once, keep on re-runs ----
@@ -64,22 +64,32 @@ if [[ -f "$ENVFILE" ]]; then
   # shellcheck disable=SC1090
   source "$ENVFILE"
 else
-  say "Generating LiveKit keys and an admin password"
+  say "Generating LiveKit keys"
   LIVEKIT_API_KEY="API$(openssl rand -hex 6)"
   LIVEKIT_API_SECRET="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 48)"
-  ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)"
-  NEW_PASSWORD=1
 fi
+# Signs invite, device and admin links. Added on first run (and on upgrades from older versions).
+AUTH_SECRET="${AUTH_SECRET:-$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 48)}"
 
 cat > "$ENVFILE" <<EOF
 PORT=3000
+PUBLIC_URL=https://$DOMAIN
 LIVEKIT_API_KEY=$LIVEKIT_API_KEY
 LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET
 LIVEKIT_PUBLIC_URL=wss://$DOMAIN
-ADMIN_PASSWORD=$ADMIN_PASSWORD
+AUTH_SECRET=$AUTH_SECRET
 EOF
 chown root:streamroom "$ENVFILE"
 chmod 640 "$ENVFILE"
+
+# One command to print a fresh admin sign-in link (first login, or if you're ever locked out).
+cat > /usr/local/bin/streamroom-admin-link <<'EOF'
+#!/usr/bin/env bash
+set -a; source /etc/streamroom.env; set +a
+export DATA_DIR=/var/lib/streamroom
+exec /usr/bin/node /opt/streamroom/server/cli.js admin-link "$@"
+EOF
+chmod 750 /usr/local/bin/streamroom-admin-link
 
 say "Writing LiveKit config"
 mkdir -p /etc/livekit
@@ -129,10 +139,13 @@ fi
 echo
 echo "=============================================================="
 echo " Streamroom is running:  https://$DOMAIN"
-if [[ -n "${NEW_PASSWORD:-}" ]]; then
-  echo " Admin password (needed to create rooms): $ADMIN_PASSWORD"
-  echo " It's stored in $ENVFILE if you lose it."
+if /usr/local/bin/streamroom-admin-link --if-no-admin >/tmp/streamroom-admin-link.txt 2>/dev/null; then
+  echo " First time? Sign in as admin with this one-time link (valid 24 hours):"
+  grep -o 'https://[^ ]*' /tmp/streamroom-admin-link.txt | sed 's/^/   /'
+else
+  echo " Admin account already set up. Need a new admin sign-in link? Run: sudo streamroom-admin-link"
 fi
+rm -f /tmp/streamroom-admin-link.txt
 echo " Make sure $DOMAIN points (DNS A record) at this server."
 echo " $PORTS_MSG"
 echo " Logs:  journalctl -u streamroom -u livekit -f"
