@@ -104,10 +104,63 @@ fn prompt(question: &str, default: Option<&str>) -> Result<String> {
     Ok(if s.is_empty() { default.unwrap_or("").to_string() } else { s })
 }
 
+/// Log file next to the exe (falls back to the temp folder), so problems can be diagnosed
+/// even if the window closes.
+fn log_path() -> std::path::PathBuf {
+    let name = "streamroom-live.log";
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(name)))
+        .filter(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).is_ok())
+        .unwrap_or_else(|| std::env::temp_dir().join(name))
+}
+
+pub fn log(line: &str) {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
+    let path = PATH.get_or_init(log_path);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "[{t}] {line}");
+    }
+}
+
+/// Prints to the console and the log file.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        println!("{line}");
+        log(&line);
+    }};
+}
+
 fn main() {
-    let result = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(anyhow::Error::from).and_then(|rt| rt.block_on(run()));
-    if let Err(e) = result {
-        eprintln!("\nError: {e:#}");
+    // Two TLS backends end up compiled in (via different dependencies); without picking one,
+    // the first secure (wss://) connection panics.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    log(&format!("---- Streamroom Live {} starting", env!("CARGO_PKG_VERSION")));
+    // Any crash: show it, log it, and keep the window open instead of vanishing.
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("Unexpected crash: {info}");
+        eprintln!("\n{msg}");
+        log(&msg);
+    }));
+
+    let result = std::panic::catch_unwind(|| {
+        tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(anyhow::Error::from).and_then(|rt| rt.block_on(run()))
+    });
+    let failed = match result {
+        Ok(Ok(())) => false,
+        Ok(Err(e)) => {
+            eprintln!("\nError: {e:#}");
+            log(&format!("Error: {e:#}"));
+            true
+        }
+        Err(_) => true, // already printed by the panic hook
+    };
+    if failed {
+        eprintln!("\nA log was saved to {}", log_path().display());
         // Double-clicked from Explorer: keep the window open long enough to read the error.
         let _ = prompt("Press Enter to close", None);
         std::process::exit(1);
@@ -116,7 +169,7 @@ fn main() {
 
 async fn run() -> Result<()> {
     let args = parse_args()?;
-    println!("Streamroom Live {}", env!("CARGO_PKG_VERSION"));
+    say!("Streamroom Live {}", env!("CARGO_PKG_VERSION"));
 
     let link_text = match args.link {
         Some(l) => l,
@@ -137,7 +190,7 @@ async fn run() -> Result<()> {
     let (room, mut events) = Room::connect(&session.livekit_url, &session.token, room_options)
         .await
         .with_context(|| format!("could not connect to the media server at {}", session.livekit_url))?;
-    println!("connected to \"{}\"", session.title);
+    say!("connected to \"{}\" via {}", session.title, session.livekit_url);
 
     // ---- capture + encode ----
     let control = Arc::new(Control::default());
@@ -147,11 +200,11 @@ async fn run() -> Result<()> {
     } else {
         wincap::start_video(args.video.clone(), control.clone(), frame_tx)?
     };
-    println!("GPU:      {}", info.adapter);
-    println!("Capture:  {} {}x{} -> {}x{} @ {} fps", info.capture_method, info.source_width, info.source_height, info.width, info.height, info.fps);
-    println!("Encoder:  {} (H.264, {:.1} Mbps)", info.encoder, args.video.bitrate_bps as f64 / 1e6);
+    say!("GPU:      {}", info.adapter);
+    say!("Capture:  {} {}x{} -> {}x{} @ {} fps", info.capture_method, info.source_width, info.source_height, info.width, info.height, info.fps);
+    say!("Encoder:  {} (H.264, {:.1} Mbps)", info.encoder, args.video.bitrate_bps as f64 / 1e6);
     if !info.unsupported_settings.is_empty() {
-        println!("          (encoder ignored: {})", info.unsupported_settings.join(", "));
+        say!("          (encoder ignored: {})", info.unsupported_settings.join(", "));
     }
 
     // ---- publish video (already encoded: LiveKit only packetizes it) ----
@@ -242,11 +295,11 @@ async fn run() -> Result<()> {
                 })?;
                 audio_status = "sharing PC audio";
             }
-            Err(e) => eprintln!("Audio: not available ({e:#}). Streaming video only."),
+            Err(e) => say!("Audio: not available ({e:#}). Streaming video only."),
         }
     }
 
-    println!("Audio:    {audio_status}");
+    say!("Audio:    {audio_status}");
     println!("\nLIVE. Press Ctrl+C to stop.\n");
 
     // ---- stats until Ctrl+C or disconnect ----
@@ -255,6 +308,7 @@ async fn run() -> Result<()> {
         let s = &stats_control.stats;
         let mut prev = (0u64, 0u64, 0u64, 0u64);
         let mut t = Instant::now();
+        let mut ticks = 0u64;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let now = (s.captured.load(Ordering::Relaxed), s.encoded.load(Ordering::Relaxed), s.bytes.load(Ordering::Relaxed), s.dropped.load(Ordering::Relaxed));
@@ -271,6 +325,15 @@ async fn run() -> Result<()> {
                 s.keyframes.load(Ordering::Relaxed),
             );
             let _ = std::io::stdout().flush();
+            for e in stats_control.take_errors() {
+                println!();
+                say!("{e}");
+            }
+            ticks += 1;
+            if ticks % 10 == 0 {
+                log(&format!("stats: capture {cap:.1} fps, sent {enc:.1} fps, {mbps:.2} Mbps, encode {:.1} ms, keyframes {}, dropped {dropped}",
+                    s.last_latency_us.load(Ordering::Relaxed) as f64 / 1000.0, s.keyframes.load(Ordering::Relaxed)));
+            }
             if stats_control.stop.load(Ordering::Relaxed) {
                 break;
             }
@@ -293,9 +356,12 @@ async fn run() -> Result<()> {
             }
         } => "capture stopped (see error above)".to_string(),
     };
-    println!("\n\n{reason}. Shutting down...");
+    say!("\n\n{reason}. Shutting down...");
     control.stop.store(true, Ordering::Relaxed);
     stats_task.abort();
+    for e in control.take_errors() {
+        say!("{e}");
+    }
     let _ = room.close().await;
     let _ = video_thread.join();
     let _ = video_pump.join();

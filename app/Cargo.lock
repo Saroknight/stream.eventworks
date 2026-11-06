@@ -2390,6 +2390,7 @@ dependencies = [
  "livekit",
  "openh264",
  "reqwest 0.13.5",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

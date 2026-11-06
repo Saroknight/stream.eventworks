@@ -21,6 +21,7 @@ tokio = { version = "1", features = ["full"] }
 url = "2"
 wincap = { path = "wincap" }
 openh264 = { version = "0.9", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 
 [profile.release]
 lto = "thin"

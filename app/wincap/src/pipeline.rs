@@ -39,7 +39,7 @@ pub fn start_video(
         if let Err(e) = run(opts, control.clone(), tx, info_tx) {
             // Before startup finished: report to the caller. After: log it.
             if ready.send(Err(anyhow::anyhow!("{e:#}"))).is_err() {
-                eprintln!("video stopped: {e:#}");
+                control.report_error(format!("video stopped: {e:#}"));
             }
             control.stop.store(true, Ordering::Relaxed);
         }

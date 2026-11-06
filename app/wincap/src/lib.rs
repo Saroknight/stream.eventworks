@@ -65,6 +65,8 @@ pub struct Control {
     /// 0 = no change requested.
     pub bitrate_request: AtomicU32,
     pub stats: Stats,
+    /// Errors from the capture threads, for the app to show and log.
+    pub errors: std::sync::Mutex<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -85,6 +87,15 @@ pub struct Stats {
 impl Control {
     pub fn request_keyframe(&self) {
         self.keyframe_requested.store(true, Ordering::Relaxed);
+    }
+    pub fn report_error(&self, msg: String) {
+        eprintln!("{msg}");
+        if let Ok(mut e) = self.errors.lock() {
+            e.push(msg);
+        }
+    }
+    pub fn take_errors(&self) -> Vec<String> {
+        self.errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default()
     }
     pub fn request_bitrate(&self, bps: u32) {
         self.bitrate_request.store(bps, Ordering::Relaxed);

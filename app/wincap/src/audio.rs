@@ -26,7 +26,7 @@ pub fn start_audio(control: Arc<Control>, tx: SyncSender<AudioChunk>) -> Result<
         // Reconnect when the device changes (headphones plugged in, default device switched).
         while !control.stop.load(Ordering::Relaxed) {
             if let Err(e) = run(&control, &tx) {
-                eprintln!("audio capture restarting: {e:#}");
+                control.report_error(format!("audio capture restarting: {e:#}"));
                 std::thread::sleep(Duration::from_millis(500));
             }
         }
