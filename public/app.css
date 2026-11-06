@@ -315,3 +315,4 @@ td.actions .btn { margin-left: 4px; }
 .golive-browser-body { display: grid; gap: 12px; margin-top: 12px; }
 .golive-browser-body #browserGo { justify-self: start; }
 .golive-browser .adv { margin: 0; }
+.ok-text { color: #3ddc97; }

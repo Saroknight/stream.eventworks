@@ -70,6 +70,15 @@ try {
   const health = await a.evaluate(() => fetch('/api/admin/health').then((r) => r.json()));
   console.log(`  health: relay ${health.relay.status} (${health.relay.text}); video address ${health.media.status}`);
   if (health.relay.status !== 'ok') throw new Error('health panel does not report the relay as on');
+  // The admin's Test button runs the same relay-only connection.
+  await a.goto(`${BASE}/admin`);
+  await a.waitForSelector('.health-card');
+  await a.click('.health-card >> text=Test');
+  await a.waitForSelector('.health-card .ok-text, .health-card .error', { timeout: 40000 });
+  const verdict = await a.innerText('.health-card .ok-text, .health-card .error');
+  console.log(`  admin Test button: ${verdict}`);
+  if (!verdict.startsWith('Works')) throw new Error('admin relay test failed');
+  console.log('✓ the admin Test button confirms the relay');
   if (errors.length) throw new Error(`script errors: ${errors.join('; ')}`);
   ok = true;
 } catch (e) {

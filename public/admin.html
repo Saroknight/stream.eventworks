@@ -59,7 +59,7 @@
   </div>
 
   <script type="module">
-    import { accountMenu, ago, api, confirmButton, copy, h, me, toast } from '/common.js';
+    import { accountMenu, ago, api, confirmButton, copy, h, livekitUrl, me, toast } from '/common.js';
     const $ = (id) => document.getElementById(id);
     const until = (ms) => { const d = Math.ceil((ms - Date.now()) / 864e5); return d <= 0 ? 'expired' : `expires in ${d} day${d > 1 ? 's' : ''}`; };
 
@@ -171,6 +171,41 @@
     const chip = (status, title, lines) => h(`div.health-card.${status}`, {},
       h('div.health-title', {}, h('span.health-dot', {}), title), ...lines.map((l) => h('div.hint', {}, l)));
 
+    // "Test" connects this browser to a throwaway room through the relay only, the way a
+    // viewer on a blocked network would, and reports whether video could get through.
+    let relayResult = null;
+    function relayCard(relay) {
+      const card = chip(relay.status, 'Port 443 fallback', [relay.text]);
+      if (relayResult) card.append(h(`div.hint.${relayResult.ok ? 'ok-text' : 'error'}`, {}, relayResult.text));
+      const btn = h('button.btn.sm', { onclick: () => testRelay(btn) }, 'Test');
+      card.append(h('div.inline', {}, btn));
+      return card;
+    }
+    async function testRelay(btn) {
+      btn.disabled = true;
+      btn.textContent = 'Testing…';
+      let roomId = null;
+      let room = null;
+      try {
+        const LK = await import('/vendor/livekit-client.esm.mjs');
+        ({ id: roomId } = await api('/api/rooms', { title: 'Relay test' }));
+        const { token, url } = await api(`/api/rooms/${encodeURIComponent(roomId)}/join`, {});
+        room = new LK.Room();
+        const t0 = Date.now();
+        await Promise.race([
+          room.connect(livekitUrl(url), token, { autoSubscribe: false, rtcConfig: { iceTransportPolicy: 'relay' } }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), 25000)),
+        ]);
+        relayResult = { ok: true, text: `Works: connected through the relay in ${((Date.now() - t0) / 1000).toFixed(1)} s.` };
+      } catch (e) {
+        relayResult = { ok: false, text: `Failed: ${e.message}. Viewers on blocked networks won't get video.` };
+      } finally {
+        try { await room?.disconnect(); } catch { /* gone */ }
+        if (roomId) await api(`/api/rooms/${encodeURIComponent(roomId)}/end`, {}).catch(() => {});
+        refreshHealth();
+      }
+    }
+
     async function refreshHealth() {
       let hs;
       try { hs = await api('/api/admin/health'); } catch (e) { $('healthGrid').replaceChildren(h('p.error', {}, e.message)); return; }
@@ -185,7 +220,7 @@
           ? chip(v.ms > 1500 ? 'warn' : 'ok', 'Video server', [`Answering in ${v.ms} ms`, `${v.rooms} room${v.rooms === 1 ? '' : 's'} · ${v.people} connected · ${v.live} live`])
           : chip('bad', 'Video server', ['Not answering', v.error || '']),
         chip(hs.media.status === 'skip' ? 'ok' : hs.media.status, 'Video address', [hs.media.text]),
-        chip(hs.relay.status, 'Port 443 fallback', [hs.relay.text]),
+        relayCard(hs.relay),
         chip(hs.failures24h ? 'warn' : 'ok', 'Connection problems', [hs.failures24h ? `${hs.failures24h} in the last 24 hours (details below)` : 'None in the last 24 hours']),
       );
       const bad = [serverStatus, v.status === 'ok' ? 'ok' : 'bad', hs.media.status].filter((x) => x === 'bad').length;

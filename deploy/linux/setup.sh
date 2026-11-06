@@ -149,6 +149,7 @@ elif ! install_caddy_l4; then
 else
   RELAY=on
 fi
+is_private_ip() { [[ "$1" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; }
 if [[ $RELAY == on ]]; then
   cat >> /etc/livekit/livekit.yaml <<EOF
 turn:
@@ -158,6 +159,11 @@ turn:
   external_tls: true
   udp_port: 3478            # TURN over UDP too  -> open 3478/udp in the firewall
 EOF
+  # The relay won't forward to private addresses unless allowed. A server whose media address
+  # is private (home network, behind NAT) must allow its own.
+  if [[ -n "$PUBLIC_IP" ]] && is_private_ip "$PUBLIC_IP"; then
+    printf '  allow_restricted_peer_cidrs:\n    - %s/32\n' "$PUBLIC_IP" >> /etc/livekit/livekit.yaml
+  fi
   echo "TURN_DOMAIN=$TURN_DOMAIN" >> "$ENVFILE"
 fi
 
