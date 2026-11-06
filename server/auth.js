@@ -51,11 +51,15 @@ export function rateLimit(max, windowMs) {
 setInterval(() => { const t = Date.now(); for (const [k, h] of hits) if (h.every((x) => x < t - 3600_000)) hits.delete(k); }, 600_000).unref();
 
 // ---- middleware ----
+// Browsers use the session cookie. The Windows app sends its own key as a Bearer token; it
+// gets the same rooms access as the browser but never admin rights.
 export function loadUser(req, _res, next) {
-  const token = parseCookies(req.headers.cookie)[COOKIE];
+  const bearer = /^Bearer (\S+)$/.exec(req.get('authorization') || '')?.[1];
+  const token = bearer || parseCookies(req.headers.cookie)[COOKIE];
   const s = store.findSession(token, SESSION_DAYS);
-  req.session = s;
-  req.user = s ? store.getUser(s.userId) : null;
+  req.viaApp = Boolean(bearer && s?.app);
+  req.session = bearer && !s?.app ? null : s; // a browser session can't be used as a Bearer key
+  req.user = req.session ? store.getUser(req.session.userId) : null;
   next();
 }
 
@@ -65,7 +69,7 @@ export function requireUser(req, res, next) {
 }
 
 export function requireAdmin(req, res, next) {
-  if (!req.user?.isAdmin) return res.status(403).json({ error: 'Admins only.' });
+  if (!req.user?.isAdmin || req.viaApp) return res.status(403).json({ error: 'Admins only.' });
   next();
 }
 

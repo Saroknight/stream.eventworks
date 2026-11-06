@@ -44,41 +44,39 @@
   </div>
   <button class="btn primary audio-gate hidden" id="audioGate">🔊 Click to turn on sound</button>
 
-  <!-- Go Live: app (best) or browser (quick) -->
+  <!-- Go Live: the app first; browser streaming tucked underneath -->
   <dialog class="sheet" id="goLive">
     <div class="sheet-head">
       <h2>Go live</h2>
       <button class="btn sm ghost" id="goClose" aria-label="Close">✕</button>
     </div>
 
-    <section class="choice">
-      <div>
-        <h3>🎮 Streamroom Live app <span class="badge ok">best for games</span></h3>
-        <p class="hint">Uses your graphics card for smooth 60 fps. Windows only.</p>
-        <p class="hint" id="appHint">Click <b>Open the app</b>. If your browser asks, allow it to open Streamroom Live.</p>
-        <div class="app-after hidden" id="appAfter">
-          <p class="hint">Starting the app… Didn't open?</p>
-          <div class="row-links">
-            <a class="btn sm" href="/download" target="_blank" rel="noopener">⬇ Get the app</a>
-            <button class="btn sm ghost" id="appCopyBtn" type="button">Copy app link instead</button>
-          </div>
+    <section class="golive-app" id="appChoice">
+      <img src="/app-icon.png" alt="" width="56" height="56">
+      <div class="golive-app-text">
+        <h3>Stream with Streamroom Live</h3>
+        <p class="hint">Smooth 60 fps from your graphics card, with your game's sound. Windows.</p>
+      </div>
+      <button class="btn primary big wide" id="appOpenBtn">Open Streamroom Live</button>
+      <p class="hint center-text" id="appHint">Your browser may ask to open the app: allow it. Don't have it? <a href="/download" target="_blank" rel="noopener">Get the app</a>.</p>
+      <div class="app-after hidden" id="appAfter">
+        <p class="hint">Starting the app… Didn't open?</p>
+        <div class="row-links">
+          <a class="btn sm" href="/download" target="_blank" rel="noopener">⬇ Get the app</a>
+          <button class="btn sm ghost" id="appCopyBtn" type="button">Copy a link for the app</button>
         </div>
       </div>
-      <button class="btn primary" id="appOpenBtn">Open the app</button>
     </section>
 
-    <section class="choice">
-      <div>
-        <h3>🌐 This browser <span class="badge">quick, no install</span></h3>
-        <p class="hint" id="browserNote">Works in Chrome or Edge. Lower frame rates than the app.</p>
+    <details class="golive-browser" id="browserBox">
+      <summary>Or stream from this browser <span class="hint">no install, lower frame rate</span></summary>
+      <div class="golive-browser-body">
+        <p class="hint" id="browserNote">Works in Chrome or Edge.</p>
         <div class="seg" id="modeSeg">
           <button type="button" data-mode="motion" aria-pressed="true">🎮 Game or video<small>Smooth, 60 fps</small></button>
           <button type="button" data-mode="detail" aria-pressed="false">📝 Text or code<small>Sharpest picture</small></button>
         </div>
-      </div>
-      <button class="btn primary" id="browserGo">Share my screen</button>
-    </section>
-
+        <button class="btn primary" id="browserGo">Share my screen</button>
     <details class="help adv" id="adv">
       <summary>Browser streaming options</summary>
       <div class="adv-grid">
@@ -118,6 +116,8 @@
         <li>For game sound on Windows, share <b>Entire screen</b> and tick <b>Share system audio</b>.</li>
         <li>If a fullscreen game shows black, switch it to <b>borderless windowed</b>.</li>
       </ul>
+    </details>
+      </div>
     </details>
     <div class="error" id="goErr"></div>
   </dialog>

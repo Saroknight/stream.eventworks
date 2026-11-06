@@ -5,9 +5,9 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 import {
-  APP_TICKET_HOURS, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_API_URL, LIVEKIT_PUBLIC_URL, ROOM_EMPTY_SECONDS,
+  APP_TICKET_HOURS, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_API_URL, LIVEKIT_PUBLIC_URL, ROOM_EMPTY_SECONDS, SESSION_DAYS,
 } from './config.js';
-import { cleanName, requireUser } from './auth.js';
+import { cleanName, rateLimit, requireUser } from './auth.js';
 import * as store from './store.js';
 import { makeTicket, readTicket } from './tickets.js';
 
@@ -174,6 +174,62 @@ router.post('/rooms/:id/app-link', async (req, res, next) => {
     if (!room) return res.status(404).json({ error: 'This room has ended.' });
     const ticket = makeTicket({ p: 'app', uid: req.user.id, room: room.name }, APP_TICKET_HOURS * 3600_000);
     res.json({ url: `${req.protocol}://${req.get('host')}/live/${room.name}#k=${ticket}` });
+  } catch (e) { next(e); }
+});
+
+// ---- the Windows app ----
+// "Open the app" launches streamroom://open?server=…&room=…&pair=…. The pair code is single-use
+// and lasts 10 minutes: the app trades it once for its own key (a revocable 90-day session,
+// listed with your devices on the admin page). An app that already has a key for you keeps it.
+const PAIR_MINUTES = 10;
+const siteBase = (req) => `${req.protocol}://${req.get('host')}`;
+
+router.post('/rooms/:id/app-open', async (req, res, next) => {
+  try {
+    const room = await getRoom(req.params.id);
+    if (!room) return res.status(404).json({ error: 'This room has ended.' });
+    const pair = makeTicket({ p: 'pair', uid: req.user.id }, PAIR_MINUTES * 60_000);
+    const q = new URLSearchParams({ server: siteBase(req), room: room.name, pair });
+    res.json({ url: `streamroom://open?${q}` });
+  } catch (e) { next(e); }
+});
+
+// Pairing doesn't need a sign-in: the code itself proves who you are.
+router.post('/app/pair', rateLimit(20, 10 * 60_000), (req, res) => {
+  const t = readTicket(req.body?.code, 'pair');
+  if (!t || store.ticketUsed(t.jti)) {
+    return res.status(403).json({ error: 'That sign-in code has expired. In a room, click Go Live, then Open the app again.' });
+  }
+  const user = store.getUser(t.uid);
+  if (!user) return res.status(403).json({ error: 'Your account was removed.' });
+  store.markTicketUsed(t.jti, t.exp);
+  const existing = store.findSession(String(req.body?.deviceKey || ''), SESSION_DAYS);
+  let deviceKey;
+  if (existing?.app && existing.userId === user.id) {
+    deviceKey = req.body.deviceKey;
+  } else {
+    if (existing?.app) store.deleteSession(existing.key); // this PC was signed in as someone else
+    const pc = cleanName(req.body?.deviceName) || 'PC';
+    deviceKey = store.createSession(user.id, `Windows app · ${pc}`, SESSION_DAYS, { app: true });
+  }
+  res.json({ deviceKey, user: { id: user.id, name: user.name, isAdmin: user.isAdmin } });
+});
+
+router.get('/app/me', requireUser, (req, res) => {
+  res.json({ user: { id: req.user.id, name: req.user.name, isAdmin: req.user.isAdmin }, app: req.viaApp });
+});
+
+router.post('/app/signout', requireUser, (req, res) => {
+  if (req.viaApp) store.deleteSession(req.session.key);
+  res.json({ ok: true });
+});
+
+// The app's pass into a room: it publishes only, never downloads anyone's stream.
+router.post('/rooms/:id/app-token', async (req, res, next) => {
+  try {
+    const room = await getRoom(req.params.id);
+    if (!room) return res.status(404).json({ error: 'This room has ended.' });
+    res.json({ token: await livekitToken(req.user, room.name, 'app'), url: LIVEKIT_PUBLIC_URL, title: parse(room.metadata).title });
   } catch (e) { next(e); }
 });
 

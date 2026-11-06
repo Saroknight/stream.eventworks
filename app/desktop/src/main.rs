@@ -1,20 +1,24 @@
 //! Streamroom Live: a small window around the streaming engine.
 //!
-//! - Opened from the site's "Open the app" button via streamroom:// links (one running copy;
-//!   a second launch hands its link to the first and exits).
+//! - Signs in once: the site's "Open Streamroom Live" button launches a streamroom:// link with
+//!   a single-use code, which the app trades for its own key (saved encrypted for this Windows
+//!   user). One running copy; a second launch hands its link to the first and exits.
+//! - Lists the rooms, starts and ends rooms, and goes live, without the site.
 //! - Shows LIVE status and stats, Stop, and settings (quality, monitor, audio, cursor).
 //! - Closing the window while live keeps streaming from the tray.
 //! - Updates itself from GitHub Releases.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod update;
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
-use streamroom_core::{link, log, now_ms, AppLink, LiveInfo, Monitor, Session, Settings, Source};
+use streamroom_core::api::parse_launch;
+use streamroom_core::{log, now_ms, Account, Api, AppLink, Launch, LiveInfo, Monitor, Session, Settings, SignedOut, Source};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent, Wry};
@@ -30,18 +34,46 @@ enum Status {
     Error { message: String },
 }
 
+/// Where we're streaming to.
+#[derive(Clone, Debug, PartialEq)]
+enum Target {
+    /// A room on the signed-in server.
+    Room(String),
+    /// An older app link with its own 12-hour ticket.
+    Legacy(AppLink),
+}
+
 struct AppState {
     session: tokio::sync::Mutex<Option<Session>>,
-    link: Mutex<Option<AppLink>>,
+    target: Mutex<Option<Target>>,
+    account: Mutex<Option<Account>>,
     status: Mutex<Status>,
     settings: Mutex<Settings>,
     update: Mutex<Option<update::Available>>,
     tray_stop: Mutex<Option<MenuItem<Wry>>>,
 }
 
+/// What the window may know about the sign-in (never the key).
+#[derive(Clone, Serialize)]
+struct AccountView {
+    name: String,
+    server: String,
+    host: String,
+}
+
+fn account_view(a: &Option<Account>) -> Option<AccountView> {
+    a.as_ref().map(|a| AccountView {
+        name: a.user_name.clone(),
+        server: a.server.clone(),
+        host: a.server.split("://").nth(1).unwrap_or(&a.server).to_string(),
+    })
+}
+
 #[derive(Serialize)]
 struct Snapshot {
     status: Status,
+    account: Option<AccountView>,
+    room: Option<String>,
     settings: Settings,
     monitors: Vec<Monitor>,
     version: &'static str,
@@ -81,30 +113,93 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+// ---------- sign-in ----------
+
+fn config_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok()
+}
+
+fn current_account(app: &AppHandle) -> Option<Account> {
+    app.state::<AppState>().account.lock().unwrap().clone()
+}
+
+fn set_account(app: &AppHandle, a: Option<Account>) {
+    if let Some(dir) = config_dir(app) {
+        match &a {
+            Some(a) => {
+                if let Err(e) = account::save(&dir, a) {
+                    log::info(&format!("couldn't save the sign-in: {e:#}"));
+                }
+            }
+            None => account::forget(&dir),
+        }
+    }
+    let view = account_view(&a);
+    *app.state::<AppState>().account.lock().unwrap() = a;
+    let _ = app.emit("account", view);
+}
+
+/// The API for the signed-in server, or a friendly error.
+fn api(app: &AppHandle) -> Result<Api, String> {
+    let a = current_account(app).ok_or("Not signed in yet. In a room on the site, click Go Live, then Open Streamroom Live.")?;
+    Api::for_account(&a).map_err(|e| format!("{e:#}"))
+}
+
+/// Turns an error into text for the window; a revoked key also signs this PC out.
+fn explain(app: &AppHandle, e: anyhow::Error) -> String {
+    if e.downcast_ref::<SignedOut>().is_some() {
+        log::info("the server no longer accepts this PC's key: signing out");
+        set_account(app, None);
+    }
+    format!("{e:#}")
+}
+
 // ---------- sessions ----------
 
-async fn begin(app: AppHandle, link: AppLink) {
+async fn begin(app: AppHandle, target: Target) {
     let state = app.state::<AppState>();
     let mut slot = state.session.lock().await;
-    // Same room and already live: nothing to do but show the window.
-    let same = state.link.lock().unwrap().as_ref().map(|l| l.base == link.base && l.room_id == link.room_id).unwrap_or(false);
-    if same && slot.is_some() {
+    // Already live in that room: nothing to do but show the window.
+    if slot.is_some() && state.target.lock().unwrap().as_ref() == Some(&target) {
         return;
     }
     if let Some(s) = slot.take() {
         s.stop().await;
     }
-    *state.link.lock().unwrap() = Some(link.clone());
-    set_status(&app, Status::Connecting { server: link.base.clone() });
+    *state.target.lock().unwrap() = Some(target.clone());
     let settings = state.settings.lock().unwrap().clone();
-    match Session::start(&link, &settings, Source::Screen).await {
+    let started = match &target {
+        Target::Legacy(link) => {
+            set_status(&app, Status::Connecting { server: link.base.clone() });
+            Session::start(link, &settings, Source::Screen).await
+        }
+        Target::Room(id) => match api(&app) {
+            Err(message) => {
+                set_status(&app, Status::Error { message });
+                return;
+            }
+            Ok(api) => {
+                set_status(&app, Status::Connecting { server: api.server.clone() });
+                log::info(&format!("going live in room {id} on {}", api.server));
+                match api.app_token(id).await {
+                    Ok(joined) => Session::start_joined(&api.server, joined, &settings, Source::Screen).await,
+                    Err(e) => Err(e),
+                }
+            }
+        },
+    };
+    match started {
         Ok((session, info)) => {
             *slot = Some(session);
             set_status(&app, Status::Live { info, since: now_ms() });
         }
         Err(e) => {
             log::info(&format!("could not go live: {e:#}"));
-            set_status(&app, Status::Error { message: format!("{e:#}") });
+            let message = explain(&app, e);
+            if let (Target::Room(id), Ok(api)) = (&target, api(&app)) {
+                api.report("app-error", &format!("could not go live: {message}"), Some(id)).await;
+            }
+            set_status(&app, Status::Error { message });
         }
     }
 }
@@ -121,24 +216,66 @@ async fn end(app: &AppHandle, reason: Option<String>) {
     });
 }
 
-/// Starts streaming from launch arguments / deep links, if one of them is an app link.
+/// A link from the site (or pasted): sign in with its code if it has one, then go live in its
+/// room if it names one.
+async fn launch(app: AppHandle, l: Launch) -> Result<(), String> {
+    show_main(&app);
+    let (server, room, pair) = match l {
+        Launch::Legacy(link) => {
+            begin(app, Target::Legacy(link)).await;
+            return Ok(());
+        }
+        Launch::Open { server, room, pair } => (server, room, pair),
+    };
+    let current = current_account(&app);
+    let signed_in_here = current.as_ref().map(|a| a.server == server).unwrap_or(false);
+    if let Some(code) = pair {
+        let api = Api::new(&server, None).map_err(|e| format!("{e:#}"))?;
+        match api.pair(&code, current.as_ref(), &account::device_name()).await {
+            Ok(a) => {
+                if current.as_ref() != Some(&a) {
+                    log::info(&format!("signed in to {} as {}", a.server, a.user_name));
+                }
+                set_account(&app, Some(a));
+            }
+            // An old or reused code is fine if we're already signed in to that server.
+            Err(e) if signed_in_here => log::info(&format!("sign-in code not used ({e:#}); keeping the current sign-in")),
+            Err(e) => {
+                let message = format!("{e:#}");
+                set_status(&app, Status::Error { message: message.clone() });
+                return Err(message);
+            }
+        }
+    } else if !signed_in_here {
+        let message = format!("This PC isn't signed in to {server} yet. In a room there, click Go Live, then Open Streamroom Live.");
+        set_status(&app, Status::Error { message: message.clone() });
+        return Err(message);
+    }
+    if let Some(id) = room {
+        begin(app, Target::Room(id)).await;
+    }
+    Ok(())
+}
+
+/// Launch arguments and deep links: act on the first Streamroom link among them.
 fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
     for a in args {
         if !(a.starts_with("streamroom://") || a.contains("/live/")) {
             continue;
         }
-        match link::parse(&a) {
+        match parse_launch(&a) {
             Ok(l) => {
-                show_main(app);
                 let app = app.clone();
-                tauri::async_runtime::spawn(async move { begin(app, l).await });
-                return;
+                tauri::async_runtime::spawn(async move {
+                    let _ = launch(app, l).await;
+                });
             }
             Err(e) => {
                 show_main(app);
                 set_status(app, Status::Error { message: format!("{e:#}") });
             }
         }
+        return;
     }
 }
 
@@ -161,6 +298,11 @@ fn load_settings(app: &AppHandle) -> Settings {
 fn get_state(state: State<'_, AppState>) -> Snapshot {
     Snapshot {
         status: state.status.lock().unwrap().clone(),
+        account: account_view(&state.account.lock().unwrap()),
+        room: match state.target.lock().unwrap().as_ref() {
+            Some(Target::Room(id)) => Some(id.clone()),
+            _ => None,
+        },
         settings: state.settings.lock().unwrap().clone(),
         monitors: streamroom_core::list_monitors(),
         version: env!("CARGO_PKG_VERSION"),
@@ -169,11 +311,96 @@ fn get_state(state: State<'_, AppState>) -> Snapshot {
     }
 }
 
+/// A pasted link.
 #[tauri::command]
 async fn start_link(app: AppHandle, link: String) -> Result<(), String> {
-    let link = link::parse(&link).map_err(|e| format!("{e:#}"))?;
-    begin(app, link).await;
+    let l = parse_launch(&link).map_err(|e| format!("{e:#}"))?;
+    launch(app, l).await
+}
+
+/// The lobby, as the site shows it.
+#[tauri::command]
+async fn list_rooms(app: AppHandle) -> Result<serde_json::Value, String> {
+    let api = api(&app)?;
+    api.rooms().await.map_err(|e| explain(&app, e))
+}
+
+#[tauri::command]
+async fn go_live(app: AppHandle, room: String) -> Result<(), String> {
+    api(&app)?;
+    begin(app, Target::Room(room)).await;
     Ok(())
+}
+
+/// Start a room and go live in it.
+#[tauri::command]
+async fn create_room(app: AppHandle, title: String) -> Result<(), String> {
+    let api = api(&app)?;
+    let id = api.create_room(title.trim()).await.map_err(|e| explain(&app, e))?;
+    log::info(&format!("started room {id}"));
+    begin(app, Target::Room(id)).await;
+    Ok(())
+}
+
+/// End a room for everyone (yours, or any room if you're the admin).
+#[tauri::command]
+async fn end_room(app: AppHandle, room: String) -> Result<(), String> {
+    let api = api(&app)?;
+    let streaming_there = matches!(app.state::<AppState>().target.lock().unwrap().as_ref(), Some(Target::Room(r)) if *r == room);
+    api.end_room(&room).await.map_err(|e| explain(&app, e))?;
+    if streaming_there {
+        end(&app, Some("You ended the room.".into())).await;
+    }
+    Ok(())
+}
+
+/// Watch a room in the browser.
+#[tauri::command]
+fn open_room(app: AppHandle, room: String) -> Result<(), String> {
+    let a = current_account(&app).ok_or("Not signed in.")?;
+    if !room.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Bad room.".into());
+    }
+    open_url(&format!("{}/r/{room}", a.server));
+    Ok(())
+}
+
+#[tauri::command]
+fn open_site(app: AppHandle) {
+    if let Some(a) = current_account(&app) {
+        open_url(&a.server);
+    }
+}
+
+#[tauri::command]
+async fn sign_out(app: AppHandle) -> Result<(), String> {
+    if is_busy(&app) {
+        end(&app, None).await;
+    }
+    if let Ok(api) = api(&app) {
+        let _ = api.signout().await; // best effort: the key is forgotten here either way
+    }
+    log::info("signed out");
+    set_account(&app, None);
+    Ok(())
+}
+
+fn open_url(url: &str) {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .creation_flags(0x0800_0000)
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
 }
 
 #[tauri::command]
@@ -181,12 +408,12 @@ async fn stop(app: AppHandle) {
     end(&app, None).await;
 }
 
-/// Restart with the same link (e.g. to apply new settings while live).
+/// Go live again in the same place (e.g. to apply new settings while live).
 #[tauri::command]
 async fn restart(app: AppHandle) -> Result<(), String> {
-    let link = app.state::<AppState>().link.lock().unwrap().clone().ok_or("Not streaming.")?;
+    let target = app.state::<AppState>().target.lock().unwrap().clone().ok_or("Not streaming.")?;
     end(&app, None).await;
-    begin(app, link).await;
+    begin(app, target).await;
     Ok(())
 }
 
@@ -261,14 +488,16 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .manage(AppState {
             session: tokio::sync::Mutex::new(None),
-            link: Mutex::new(None),
+            target: Mutex::new(None),
+            account: Mutex::new(None),
             status: Mutex::new(Status::Idle),
             settings: Mutex::new(Settings::default()),
             update: Mutex::new(None),
             tray_stop: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
-            get_state, start_link, stop, restart, dismiss, save_settings, open_logs, check_update, install_update
+            get_state, start_link, stop, restart, dismiss, save_settings, open_logs, check_update, install_update,
+            list_rooms, go_live, create_room, end_room, open_room, open_site, sign_out
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -277,6 +506,13 @@ fn main() {
             }
             log::info(&format!("---- Streamroom Live {} starting", env!("CARGO_PKG_VERSION")));
             *app.state::<AppState>().settings.lock().unwrap() = load_settings(&handle);
+            if let Some(dir) = config_dir(&handle) {
+                let saved = account::load(&dir);
+                if let Some(a) = &saved {
+                    log::info(&format!("signed in to {} as {}", a.server, a.user_name));
+                }
+                *app.state::<AppState>().account.lock().unwrap() = saved;
+            }
 
             // streamroom:// links: make sure they point at this copy (the installer registers
             // them too; this also covers a moved install).
@@ -347,6 +583,15 @@ fn main() {
                     };
                     if let Some(reason) = ended {
                         log::info(&format!("session ended: {reason}"));
+                        if reason.starts_with("Disconnected") {
+                            let room = match h.state::<AppState>().target.lock().unwrap().as_ref() {
+                                Some(Target::Room(id)) => Some(id.clone()),
+                                _ => None,
+                            };
+                            if let Ok(api) = api(&h) {
+                                api.report("dropped", &reason, room.as_deref()).await;
+                            }
+                        }
                         end(&h, Some(reason)).await;
                         show_main(&h);
                     }

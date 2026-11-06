@@ -49,12 +49,12 @@ pub fn parse(input: &str) -> Result<AppLink> {
 }
 
 #[derive(Deserialize)]
-struct TokenResponse {
-    token: String,
+pub(crate) struct TokenResponse {
+    pub(crate) token: String,
     #[serde(default)]
-    url: String,
+    pub(crate) url: String,
     #[serde(default)]
-    title: String,
+    pub(crate) title: String,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +62,7 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct Joined {
     pub livekit_url: String,
     pub token: String,
@@ -90,17 +91,20 @@ pub async fn fetch_token(link: &AppLink) -> Result<Joined> {
         bail!("{msg}");
     }
     let t: TokenResponse = serde_json::from_str(&body).context("unexpected reply from the server")?;
-    // Same rule as the web pages: an empty `url` means "work it out from the site address".
-    // https -> same domain (Caddy forwards to LiveKit); http (local dev) -> LiveKit on port 7880.
-    let livekit_url = if !t.url.is_empty() {
-        t.url
-    } else if let Some(rest) = link.base.strip_prefix("https://") {
+    Ok(Joined { livekit_url: livekit_url_for(&link.base, &t.url)?, token: t.token, title: t.title })
+}
+
+/// Same rule as the web pages: an empty `url` from the server means "work it out from the site
+/// address". https -> same domain (Caddy forwards to LiveKit); http (local dev) -> port 7880.
+pub fn livekit_url_for(base: &str, from_server: &str) -> Result<String> {
+    Ok(if !from_server.is_empty() {
+        from_server.to_string()
+    } else if let Some(rest) = base.strip_prefix("https://") {
         format!("wss://{rest}")
     } else {
-        let host = url::Url::parse(&link.base)?.host_str().unwrap_or("localhost").to_string();
+        let host = url::Url::parse(base)?.host_str().unwrap_or("localhost").to_string();
         format!("ws://{host}:7880")
-    };
-    Ok(Joined { livekit_url, token: t.token, title: t.title })
+    })
 }
 
 #[cfg(test)]

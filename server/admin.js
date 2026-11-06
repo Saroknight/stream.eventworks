@@ -18,7 +18,7 @@ router.get('/admin/state', async (req, res, next) => {
       return {
         id: u.id, name: u.name, isAdmin: u.isAdmin, createdAt: u.createdAt,
         lastSeen: Math.max(u.lastSeen || 0, ...sessions.map((s) => s.lastSeen)),
-        devices: sessions.map((s) => ({ device: s.device, lastSeen: s.lastSeen })),
+        devices: sessions.map((s) => ({ id: s.key.slice(0, 12), device: s.device, app: Boolean(s.app), lastSeen: s.lastSeen })),
         invite: inv ? { id: inv.id, expiresAt: inv.expiresAt } : null,
       };
     }).sort((a, b) => b.lastSeen - a.lastSeen);
@@ -62,6 +62,11 @@ router.post('/admin/users/:id/link', (req, res) => {
 
 router.post('/admin/invites/:id/cancel', (req, res) => {
   store.deleteInvite(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/admin/users/:id/devices/:sid/signout', (req, res) => {
+  if (!store.deleteSessionById(req.params.id, req.params.sid)) return res.status(404).json({ error: 'That device is already signed out.' });
   res.json({ ok: true });
 });
 

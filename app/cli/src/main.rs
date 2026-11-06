@@ -7,7 +7,8 @@ use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use streamroom_core::{link, log, Session, Settings, Source};
+use streamroom_core::api::parse_launch;
+use streamroom_core::{log, Api, Launch, Session, Settings, Source};
 
 const HELP: &str = "Streamroom Live (console)
 
@@ -88,12 +89,25 @@ async fn run() -> Result<()> {
     println!("Streamroom Live {} (console)", env!("CARGO_PKG_VERSION"));
     let link_text = match link_text {
         Some(l) => l,
-        None => prompt("Paste your app link (Go Live → Copy app link)")?,
+        None => prompt("Paste a link for the app (Go Live → Copy a link for the app)")?,
     };
-    let link = link::parse(&link_text)?;
-    print!("Connecting to {} ... ", link.base);
+    let launch = parse_launch(&link_text)?;
+    print!("Connecting to {} ... ", launch.server());
     std::io::stdout().flush()?;
-    let (session, info) = Session::start(&link, &settings, source).await?;
+    // New links carry a single-use sign-in code: sign in for this run only, sign out at the end.
+    let mut signed_in: Option<Api> = None;
+    let (session, info) = match launch {
+        Launch::Legacy(link) => Session::start(&link, &settings, source).await?,
+        Launch::Open { server, room, pair } => {
+            let code = pair.ok_or_else(|| anyhow::anyhow!("that link has no sign-in code. Use Go Live → Copy a link for the app."))?;
+            let room = room.ok_or_else(|| anyhow::anyhow!("that link doesn't name a room"))?;
+            let account = Api::new(&server, None)?.pair(&code, None, "console").await?;
+            let api = Api::for_account(&account)?;
+            let joined = api.app_token(&room).await?;
+            signed_in = Some(api);
+            Session::start_joined(&server, joined, &settings, source).await?
+        }
+    };
     println!("live in \"{}\"", info.room_title);
     println!("GPU:      {}", info.video.adapter);
     println!("Capture:  {} {}x{} -> {}x{} @ {} fps", info.video.capture_method, info.video.source_width, info.video.source_height, info.video.width, info.video.height, info.video.fps);
@@ -126,5 +140,8 @@ async fn run() -> Result<()> {
     println!("\n\n{reason} Shutting down...");
     log::info(&reason);
     session.stop().await;
+    if let Some(api) = signed_in {
+        let _ = api.signout().await;
+    }
     Ok(())
 }

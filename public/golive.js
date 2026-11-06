@@ -125,7 +125,7 @@ export function setupBrowserStreaming({ room, roomId, onLocalVideo, onLiveChange
     store.set('sr.adv', adv);
     document.querySelectorAll('[data-adv]').forEach((sel) => { sel.value = 'auto'; });
   };
-  if (Object.values(adv).some((v) => v !== 'auto')) $('adv').open = true;
+  if (Object.values(adv).some((v) => v !== 'auto')) { $('adv').open = true; $('browserBox').open = true; }
 
   if (!navigator.mediaDevices?.getDisplayMedia) {
     $('browserGo').disabled = true;

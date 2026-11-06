@@ -125,6 +125,7 @@ async function main() {
     });
 
     let roomUrl;
+    let appLaunch;
     await step('friend starts a room', async () => {
       await f.fill('#roomTitle', 'Test night');
       await f.click('#startBtn');
@@ -151,7 +152,9 @@ async function main() {
       p.on('request', (r) => { if (r.url().startsWith('streamroom:')) opened.push(r.url()); });
       await p.click('#appOpenBtn');
       await waitFor(() => opened.length > 0, 'streamroom:// navigation', 8000);
-      expect(/^streamroom:\/\/open\?/.test(opened[0]), `bad deep link ${opened[0]}`);
+      const deep = new URL(opened[0]);
+      expect(deep.protocol === 'streamroom:' && deep.searchParams.get('room') && deep.searchParams.get('pair'), `bad deep link ${opened[0]}`);
+      appLaunch = opened[0];
       // Opening the app must not drop the page from the room.
       await p.waitForTimeout(1500);
       expect(await p.isEnabled('#liveBtn'), 'room page disconnected after opening the app');
@@ -159,9 +162,43 @@ async function main() {
       await p.close({ runBeforeUnload: false }).catch(() => {});
     });
 
+    await step('the app signs in once with the code and can do everything with its key', async () => {
+      const deep = new URL(appLaunch);
+      const server = deep.searchParams.get('server');
+      const post = (url, body, key) => fetch(`${server}${url}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) }, body: JSON.stringify(body || {}),
+      });
+      const get = (url, key) => fetch(`${server}${url}`, { headers: { Authorization: `Bearer ${key}` } });
+      const pair = await post('/api/app/pair', { code: deep.searchParams.get('pair'), deviceName: 'TEST-PC' });
+      expect(pair.ok, `pair ${pair.status}`);
+      const { deviceKey, user } = await pair.json();
+      expect(user.name === 'Alex' && deviceKey, 'pair reply');
+      const again = await post('/api/app/pair', { code: deep.searchParams.get('pair'), deviceName: 'TEST-PC' });
+      expect(again.status === 403, 'pair code worked twice');
+      const rooms = await (await get('/api/rooms', deviceKey)).json();
+      expect(rooms.rooms.some((r) => r.id === deep.searchParams.get('room')), 'app cannot see the room');
+      const tok = await post(`/api/rooms/${deep.searchParams.get('room')}/app-token`, {}, deviceKey);
+      expect(tok.ok && (await tok.json()).token, `app token ${tok.status}`);
+      const made = await post('/api/rooms', { title: 'From the app' }, deviceKey);
+      const madeRoom = await made.json();
+      expect(made.ok && madeRoom.id, 'app could not start a room');
+      const ended = await post(`/api/rooms/${madeRoom.id}/end`, {}, deviceKey);
+      expect(ended.ok, 'app could not end its room');
+      // The app's key never opens admin pages, even for the admin.
+      const adminTry = await get('/api/admin/state', deviceKey);
+      expect(adminTry.status === 401 || adminTry.status === 403, `admin via app key: ${adminTry.status}`);
+      // Shows on the admin page as a device, and signing out kills the key.
+      await a.goto(`${BASE}/admin`);
+      await a.waitForSelector('#people tr');
+      expect((await a.innerText('#people')).includes('Windows app · TEST-PC'), 'app device not listed');
+      await post('/api/app/signout', {}, deviceKey);
+      expect((await get('/api/app/me', deviceKey)).status === 401, 'key still works after sign-out');
+    });
+
     await step('friend streams from the browser and the admin sees it', async () => {
       await f.click('#liveBtn');
       await f.waitForSelector('#goLive[open]');
+      if (!(await f.$eval('#browserBox', (d) => d.open))) await f.click('#browserBox summary');
       await f.click('#browserGo');
       await f.waitForSelector('#liveBar:not(.hidden)', { timeout: 20000 }).catch(async (e) => {
         await f.screenshot({ path: path.join(SHOTS, 'browser-golive-failed.png') });
@@ -172,6 +209,28 @@ async function main() {
       await waitFor(() => a.$eval('.tile video', (v) => v.videoWidth > 0), 'video frames', 20000);
       await a.screenshot({ path: path.join(SHOTS, 'room-viewer.png') });
     });
+
+    // Optional: the real streaming engine (Linux build of the app's engine, test pattern).
+    if (process.env.E2E_CLI) {
+      await step('the app engine signs in with the link and streams; viewers see it', async () => {
+        await f.click('#liveBtn'); // stop the browser stream so the app's is the only one
+        await f.waitForSelector('#liveBar', { state: 'hidden' });
+        const { url } = await f.evaluate((id) => fetch(`/api/rooms/${id}/app-open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((r) => r.json()), roomUrl.split('/').pop());
+        const cli = start('app-engine', process.env.E2E_CLI, [url, '--test-pattern', '--height', '720'], noProxy);
+        try {
+          await waitFor(() => a.$$eval('.tile video', (vs) => vs.some((v) => v.videoHeight === 720)), '720p video from the app', 30000);
+          // The streamer's own page shows the placeholder, not a second copy of the video.
+          await waitFor(() => f.$eval('.tile.mine', (t) => t.innerText.includes('You (app)')), 'You (app) tile', 10000);
+          await a.screenshot({ path: path.join(SHOTS, 'room-app-stream.png') });
+        } finally { cli.kill('SIGINT'); }
+        await waitFor(() => a.$$eval('.tile video', (vs) => vs.length === 0), 'app stream gone after stop', 15000);
+        // Restart the browser stream for the following steps.
+        await f.click('#liveBtn');
+        await f.waitForSelector('#goLive[open]');
+        await f.click('#browserGo');
+        await f.waitForSelector('#liveBar:not(.hidden)', { timeout: 20000 });
+      });
+    }
 
     await step('download page and app info API', async () => {
       const r = await fetch(`${BASE}/api/app/latest`);

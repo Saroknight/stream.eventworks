@@ -14,25 +14,45 @@
 
   <header>
     <img src="logo.png" alt="" class="logo">
-    <div>
+    <div class="who">
       <b>Streamroom Live</b>
-      <span class="muted" id="version"></span>
+      <span class="muted" id="whoLine"></span>
+    </div>
+    <div class="menu-wrap hidden" id="menuWrap">
+      <button class="icon-btn" id="menuBtn" aria-label="Account" aria-haspopup="menu">⋯</button>
+      <div class="menu hidden" id="menu" role="menu">
+        <button class="menu-item" id="openSiteBtn">Open Streamroom in the browser</button>
+        <button class="menu-item" id="signOutBtn">Sign out of this PC</button>
+      </div>
     </div>
   </header>
 
   <main>
-    <!-- idle -->
-    <section class="panel state" data-state="idle">
+    <!-- not signed in -->
+    <section class="panel state hidden" data-state="signin">
       <div class="ready-dot"></div>
-      <h1>Ready when you are</h1>
-      <p class="muted">In a Streamroom room, click <b>Go Live</b>, then <b>Open the app</b>. Streaming starts right away.</p>
-      <details class="paste">
-        <summary>Have an app link? Paste it</summary>
-        <form id="pasteForm" class="row">
-          <input id="pasteInput" type="text" placeholder="https://…/live/…#k=…" autocomplete="off" spellcheck="false">
-          <button class="btn" type="submit">Go live</button>
-        </form>
-      </details>
+      <h1>Sign in once</h1>
+      <ol class="steps">
+        <li>Open Streamroom in your browser and join (or start) a room.</li>
+        <li>Click <b>Go Live</b>, then <b>Open Streamroom Live</b>.</li>
+      </ol>
+      <p class="muted small">This PC stays signed in after that. Next time, start or join rooms right here.</p>
+    </section>
+
+    <!-- signed in, not streaming -->
+    <section class="state hidden" data-state="idle">
+      <form class="panel start" id="startForm">
+        <label for="startTitle">Start a room and go live</label>
+        <div class="row tight">
+          <input id="startTitle" type="text" maxlength="32" autocomplete="off" spellcheck="false">
+          <button class="btn primary" type="submit" id="startBtn">Go live</button>
+        </div>
+      </form>
+      <div class="rooms-head">
+        <h2>Rooms</h2>
+        <span class="muted small" id="roomsNote"></span>
+      </div>
+      <div class="rooms" id="rooms"></div>
     </section>
 
     <!-- connecting -->
@@ -49,6 +69,7 @@
         <span class="timer" id="timer">0:00</span>
       </div>
       <h1 id="roomTitle"></h1>
+      <p class="muted small" id="watchers"></p>
       <div class="stats">
         <div><span id="sSent">–</span><small>fps sent</small></div>
         <div><span id="sCap">–</span><small>fps captured</small></div>
@@ -58,6 +79,10 @@
       <p class="muted small" id="details"></p>
       <p class="muted small hint hidden" id="stillHint">Frame rate follows the screen: a still screen sends fewer frames.</p>
       <button class="btn big stop" id="stopBtn">Stop streaming</button>
+      <div class="row">
+        <button class="btn sm ghost hidden" id="watchBtn">Watch in browser</button>
+        <button class="btn sm ghost danger hidden" id="endRoomBtn">End room for everyone</button>
+      </div>
       <p class="muted small center">Closing this window keeps you live. Find Streamroom Live in the tray.</p>
     </section>
 
@@ -71,6 +96,14 @@
         <button class="btn primary" id="okBtn">OK</button>
       </div>
     </section>
+
+    <details class="panel paste" id="pasteBox">
+      <summary>Have a link? Paste it</summary>
+      <form id="pasteForm" class="row tight">
+        <input id="pasteInput" type="text" placeholder="streamroom://open?… or https://…/live/…" autocomplete="off" spellcheck="false">
+        <button class="btn" type="submit">Go</button>
+      </form>
+    </details>
 
     <!-- settings -->
     <details class="panel settings" id="settings">

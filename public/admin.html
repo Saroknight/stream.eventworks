@@ -81,7 +81,11 @@
       const nameCell = h('td', {}, h('b', {}, p.name), p.isAdmin ? h('span.badge', {}, 'admin') : null,
         p.id === myId ? h('span.hint', {}, ' (you)') : null);
       const devices = p.devices.length
-        ? p.devices.map((d) => h('div.hint', {}, `${d.device} · ${ago(d.lastSeen)}`))
+        ? p.devices.map((d) => {
+          const out = h('button.link-btn', { title: 'Sign this device out' }, 'sign out');
+          confirmButton(out, 'Sure?', act(async () => { await api(`/api/admin/users/${p.id}/devices/${encodeURIComponent(d.id)}/signout`, {}); toast('Signed out'); }));
+          return h('div.hint.device', {}, `${d.app ? '🎮 ' : ''}${d.device} · ${ago(d.lastSeen)} · `, out);
+        })
         : [h('div.hint', {}, 'No signed-in devices')];
       const rename = h('button.btn.sm.ghost', {
         onclick: () => {

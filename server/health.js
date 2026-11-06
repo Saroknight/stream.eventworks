@@ -61,7 +61,7 @@ export function record(req, user, body, client) {
 export const router = express.Router();
 
 router.post('/health/report', requireUser, rateLimit(30, 10 * 60_000), (req, res) => {
-  record(req, req.user, req.body, 'web');
+  record(req, req.user, req.body, req.viaApp ? 'app' : 'web');
   res.json({ ok: true });
 });
 

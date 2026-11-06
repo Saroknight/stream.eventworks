@@ -56,9 +56,9 @@ export function deleteUser(id) {
 }
 
 // ---- sessions ----
-export function createSession(userId, device, days) {
+export function createSession(userId, device, days, { app = false } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
-  state.sessions[hash(token)] = { userId, device, createdAt: now(), lastSeen: now(), expiresAt: now() + days * 864e5 };
+  state.sessions[hash(token)] = { userId, device, app, createdAt: now(), lastSeen: now(), expiresAt: now() + days * 864e5 };
   save();
   return token;
 }

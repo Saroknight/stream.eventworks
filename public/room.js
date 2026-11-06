@@ -300,20 +300,26 @@ $('liveBtn').onclick = () => {
   else { $('goErr').textContent = ''; $('goLive').showModal(); }
 };
 $('goClose').onclick = () => $('goLive').close();
-// The app link signs the app in as you for 12 hours. "Open the app" hands it over through the
-// streamroom:// link the installer registers, so nobody has to copy or paste anything.
-const appLink = () => api(`/api/rooms/${encodeURIComponent(roomId)}/app-link`, {}).then((r) => r.url);
+// "Open Streamroom Live" launches the app through the streamroom:// link its installer
+// registers. The link names the room and carries a single-use, 10-minute sign-in code; an app
+// that's already signed in as you just ignores the code.
+const appOpenLink = () => api(`/api/rooms/${encodeURIComponent(roomId)}/app-open`, {}).then((r) => r.url);
 $('appOpenBtn').onclick = async () => {
   $('goErr').textContent = '';
   try {
-    const url = await appLink();
-    location.href = `streamroom://open?link=${encodeURIComponent(url)}`;
+    location.href = await appOpenLink();
     $('appAfter').classList.remove('hidden');
   } catch (e) { $('goErr').textContent = e.message; }
 };
 $('appCopyBtn').onclick = async () => {
-  try { await copy(await appLink(), 'App link copied. Paste it into Streamroom Live.'); } catch (e) { $('goErr').textContent = e.message; }
+  try { await copy(await appOpenLink(), 'Copied. In Streamroom Live, paste it into "Have a link?"'); } catch (e) { $('goErr').textContent = e.message; }
 };
+// The app is Windows-only: elsewhere, lead with the browser option.
+if (!/Windows/.test(navigator.userAgent)) {
+  $('browserBox').open = true;
+  $('appHint').textContent = 'Streamroom Live is a Windows app. On this computer, stream from the browser below.';
+  $('appOpenBtn').classList.remove('primary');
+}
 $('goLive').addEventListener('close', () => $('appAfter').classList.add('hidden'));
 
 // ---------- stats on tiles ----------

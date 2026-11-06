@@ -4,6 +4,7 @@
 //! (wincap: DXGI Desktop Duplication -> hardware H.264), publishes the already-encoded video
 //! plus PC audio, and reports stats. Stopping it, or the room ending, tears everything down.
 
+pub mod api;
 pub mod link;
 pub mod log;
 #[cfg(feature = "testsrc")]
@@ -26,7 +27,8 @@ use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
 use serde::{Deserialize, Serialize};
 
-pub use link::AppLink;
+pub use api::{Account, Api, Launch, SignedOut};
+pub use link::{AppLink, Joined};
 pub use wincap::{list_monitors, Control, Monitor, VideoInfo};
 
 /// Call once at startup. Two TLS backends end up compiled in through different dependencies;
@@ -97,9 +99,15 @@ pub struct Session {
 }
 
 impl Session {
+    /// Older flow: an app link with a 12-hour ticket (still accepted by the server).
     pub async fn start(link: &AppLink, settings: &Settings, source: Source) -> Result<(Session, LiveInfo)> {
         log::info(&format!("connecting to {} (room {})", link.base, link.room_id));
         let joined = link::fetch_token(link).await?;
+        Self::start_joined(&link.base, joined, settings, source).await
+    }
+
+    /// Start streaming with a LiveKit pass already in hand (e.g. from [`Api::app_token`]).
+    pub async fn start_joined(server: &str, joined: Joined, settings: &Settings, source: Source) -> Result<(Session, LiveInfo)> {
         let mut room_options = RoomOptions::default();
         room_options.auto_subscribe = false;
         let (room, mut events) = Room::connect(&joined.livekit_url, &joined.token, room_options)
@@ -140,7 +148,7 @@ impl Session {
         let now = Instant::now();
         let live = LiveInfo {
             room_title: joined.title,
-            server: link.base.clone(),
+            server: server.to_string(),
             video: info.0,
             bitrate_mbps: settings.bitrate_mbps,
             audio: info.1,
