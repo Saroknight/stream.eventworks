@@ -204,14 +204,60 @@ room.on(LK.RoomEvent.ParticipantConnected, updateCount);
 room.on(LK.RoomEvent.Reconnecting, () => toast('Connection hiccup, reconnecting…'));
 room.on(LK.RoomEvent.Reconnected, () => toast('Back online'));
 room.on(LK.RoomEvent.Disconnected, (reason) => {
+  if (!joined) return; // a failed join attempt; join() handles that
   if (reason === LK.DisconnectReason.ROOM_DELETED) {
     showOverlay('This room has ended', 'Head back to the lobby to find another one.');
   } else if (reason === LK.DisconnectReason.PARTICIPANT_REMOVED) {
     showOverlay('You were removed from this room', 'If that was a mistake, ask the admin.');
   } else if (reason !== LK.DisconnectReason.CLIENT_INITIATED) {
-    showOverlay('Disconnected', 'The connection to the server was lost.', { rejoin: true });
+    // LiveKit already tried to resume and couldn't. Rejoin from scratch a few times, then explain.
+    report('dropped', `disconnected: ${LK.DisconnectReason[reason] ?? reason}`);
+    const tries = rejoinCount();
+    if (tries < 3 && navigator.onLine !== false) {
+      showOverlay('Connection lost', 'Reconnecting…');
+      setTimeout(() => location.reload(), 1500 + tries * 2000);
+    } else {
+      showOverlay(...MESSAGES.dropped, { rejoin: true });
+    }
   }
 });
+
+// ---------- connection problems: say what actually went wrong ----------
+let joined = false;
+const MESSAGES = {
+  'network-blocked': ['Your network is blocking video',
+    'You reached Streamroom, but the video connection couldn\'t get through from this network. Try again, or try another network (like your phone\'s hotspot). The admin can see what went wrong.'],
+  'server-unreachable': ['Can\'t reach the video server',
+    'Check that you\'re online and try again. If other people can get in, your network may be blocking it. The admin can see what went wrong.'],
+  'not-allowed': ['The video server turned you away',
+    'Your pass for this room was refused. Go back to the lobby and join the room again.'],
+  dropped: ['Connection lost',
+    'Your connection to the room dropped and didn\'t come back. Check that you\'re online, then try again.'],
+  'join-failed': ['Couldn\'t join the room', 'Something went wrong while joining. Try again in a moment.'],
+};
+function classify(e) {
+  // reasonName is the SDK's ConnectionErrorReason as text, which is stable across SDK versions.
+  const why = String(e?.reasonName ?? LK.ConnectionErrorReason?.[e?.reason] ?? '');
+  const msg = String(e?.message || '');
+  if (why === 'NotAllowed') return 'not-allowed';
+  if (/pc connection|peer ?connection|\bice\b/i.test(msg)) return 'network-blocked';
+  if (['ServerUnreachable', 'WebSocket', 'Timeout', 'ServiceNotFound'].includes(why) || /signal connection/i.test(msg)) return 'server-unreachable';
+  return 'join-failed';
+}
+function report(kind, message, detail = {}) {
+  api('/api/health/report', {
+    kind, room: roomId, message: String(message).slice(0, 300),
+    detail: { ...detail, online: navigator.onLine, net: navigator.connection?.effectiveType || null },
+  }).catch(() => {});
+}
+// Auto-rejoins after a drop, counted per room so a broken connection can't reload forever.
+function rejoinCount() {
+  const key = `sr.rejoin.${roomId}`;
+  const r = store.get(key, { n: 0, at: 0 });
+  const n = Date.now() - r.at < 120_000 ? r.n : 0;
+  store.set(key, { n: n + 1, at: Date.now() });
+  return n;
+}
 
 // ---------- your own browser stream ----------
 function onLocalVideo(track) {
@@ -312,8 +358,7 @@ window.addEventListener('keydown', (e) => {
         try { await api(`/api/rooms/${encodeURIComponent(roomId)}/end`, {}); } catch (e) { toast(e.message); }
       });
     }
-    const { token, url } = await api(`/api/rooms/${encodeURIComponent(roomId)}/join`, {});
-    await room.connect(livekitUrl(url), token, { autoSubscribe: false });
+    await join();
     for (const p of room.remoteParticipants.values()) for (const pub of p.trackPublications.values()) handlePublication(pub, p);
     browser = setupBrowserStreaming({ room, roomId, onLocalVideo, onLiveChange });
     $('liveBtn').disabled = false;
@@ -321,6 +366,34 @@ window.addEventListener('keydown', (e) => {
     updateCount();
   } catch (e) {
     console.error(e);
-    if ($('overlay').classList.contains('hidden')) showOverlay('Couldn\'t join the room', e.message, { rejoin: true });
+    if (!$('overlay').classList.contains('hidden')) return;
+    if (e.status) { showOverlay('Couldn\'t join the room', e.message, { rejoin: true }); return; }
+    showOverlay(...MESSAGES[e.kind || 'join-failed'], { rejoin: true });
   }
 })();
+
+// Connect, retrying network trouble twice before giving up. Each failure is reported so the
+// admin's Health panel shows who couldn't connect and why.
+async function join() {
+  const delays = [0, 2000, 5000];
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i]) {
+      toast('Connection trouble, trying again…');
+      await new Promise((r) => setTimeout(r, delays[i]));
+    }
+    try {
+      const { token, url } = await api(`/api/rooms/${encodeURIComponent(roomId)}/join`, {});
+      await room.connect(livekitUrl(url), token, { autoSubscribe: false });
+      joined = true;
+      return;
+    } catch (e) {
+      if (e.status) throw e; // our own API said no (room ended, signed out): not a network problem
+      const kind = classify(e);
+      if (kind === 'not-allowed' || i === delays.length - 1) {
+        report(kind, e.message, { attempts: i + 1, reason: e.reasonName ?? e.reason ?? null });
+        e.kind = kind;
+        throw e;
+      }
+    }
+  }
+}

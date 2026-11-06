@@ -198,3 +198,16 @@ export async function adminRooms() {
   invalidate();
   return (await listRooms()).map(({ room, participants }) => describe(room, participants, null));
 }
+
+// For the health panel: is LiveKit answering, and how busy is it?
+export async function liveSummary() {
+  invalidate();
+  const rooms = await listRooms();
+  let people = 0;
+  let live = 0;
+  for (const { participants } of rooms) {
+    people += participants.length;
+    live += participants.filter((p) => p.tracks.some((t) => t.source === TrackSource.SCREEN_SHARE)).length;
+  }
+  return { rooms: rooms.length, people, live };
+}

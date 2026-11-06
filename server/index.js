@@ -7,6 +7,7 @@ import * as auth from './auth.js';
 import * as rooms from './rooms.js';
 import * as admin from './admin.js';
 import * as appinfo from './appinfo.js';
+import * as health from './health.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -21,7 +22,7 @@ app.use((_req, res, next) => {
 });
 
 app.use('/api', express.json({ limit: '10kb' }), auth.jsonOnly, auth.loadUser);
-app.use('/api', auth.router, rooms.router, admin.router, appinfo.router);
+app.use('/api', auth.router, rooms.router, admin.router, appinfo.router, health.router);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 // eslint-disable-next-line no-unused-vars
 app.use('/api', (err, _req, res, _next) => {

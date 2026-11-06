@@ -182,7 +182,30 @@ async function main() {
       expect(dl.status === 302, `/api/app/download ${dl.status}`);
     });
 
+    await step('a blocked video connection gets a clear message and shows in Health', async () => {
+      const p = await friend.ctx.newPage();
+      // Kill LiveKit's WebSocket, as a hostile network would.
+      await p.routeWebSocket(/\/rtc/, (ws) => ws.close());
+      await p.goto(roomUrl);
+      await p.waitForSelector('#overlay:not(.hidden)', { timeout: 30000 });
+      const title = await p.innerText('#overlayTitle');
+      const reported = await a.evaluate(() => fetch('/api/admin/health').then((r) => r.json()).then((j) => j.events.slice(0, 3).map((e) => `${e.kind}: ${e.message} ${JSON.stringify(e.detail)}`)));
+      expect(/can't reach the video server/i.test(title), `unexpected message: ${title}; reported: ${reported.join(' | ')}`);
+      await p.screenshot({ path: path.join(SHOTS, 'blocked.png') });
+      await p.close();
+      const ah = await admin.ctx.newPage();
+      await ah.goto(`${BASE}/admin`);
+      await ah.waitForSelector('.health-card');
+      await ah.click('#healthEventsBox summary');
+      await ah.waitForSelector('#healthEvents tr', { timeout: 5000 });
+      const row = await ah.innerText('#healthEvents tr');
+      expect(row.includes('Alex') && /video server/i.test(row), `health row: ${row}`);
+      await ah.screenshot({ path: path.join(SHOTS, 'admin-health.png'), fullPage: true });
+      await ah.close();
+    });
+
     await step('ending the room closes it for viewers', async () => {
+      await f.bringToFront();
       await f.click('#liveBtn'); // stop browser stream
       await f.waitForSelector('#endBtn:not(.hidden)');
       await f.click('#endBtn');

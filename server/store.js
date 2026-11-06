@@ -7,7 +7,7 @@ import { DATA_DIR } from './config.js';
 
 const FILE = path.join(DATA_DIR, 'state.json');
 
-const empty = () => ({ users: {}, sessions: {}, invites: {}, usedTickets: {} });
+const empty = () => ({ users: {}, sessions: {}, invites: {}, usedTickets: {}, events: [] });
 let state = empty();
 try { state = { ...empty(), ...JSON.parse(fs.readFileSync(FILE, 'utf8')) }; } catch { /* fresh start */ }
 
@@ -130,3 +130,13 @@ setInterval(() => {
   for (const [k, i] of Object.entries(state.invites)) if (!i.userId && i.expiresAt < now() - 30 * 864e5) { delete state.invites[k]; changed = true; }
   if (changed) save();
 }, 3600_000).unref();
+
+// ---- health events (connection problems reported by browsers and the app) ----
+const MAX_EVENTS = 300;
+export function addEvent(e) {
+  state.events.push({ id: newId(6), at: now(), ...e });
+  if (state.events.length > MAX_EVENTS) state.events.splice(0, state.events.length - MAX_EVENTS);
+  save();
+}
+export const events = () => state.events.slice().reverse();
+export function clearEvents() { state.events = []; save(); }

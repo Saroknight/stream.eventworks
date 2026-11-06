@@ -262,3 +262,17 @@ td.actions .btn { margin-left: 4px; }
   .dl-hero { flex-direction: column; gap: 14px; }
 }
 .dl-actions .btn.big { width: auto; }
+
+/* ---------- admin: health ---------- */
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 8px; }
+.health-card { background: var(--panel-2, #1f222b); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.health-card .hint { margin-top: 3px; overflow-wrap: anywhere; }
+.health-title { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+.health-dot { width: 9px; height: 9px; border-radius: 50%; background: #3ddc97; flex: none; }
+.health-card.warn .health-dot { background: #ffc46b; }
+.health-card.bad { border-color: rgba(255,77,94,.5); }
+.health-card.bad .health-dot { background: var(--accent); }
+.health-events { margin-top: 14px; }
+.health-events summary { cursor: pointer; font-weight: 600; }
+.health-events table { margin-top: 8px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }

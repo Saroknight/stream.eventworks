@@ -19,6 +19,15 @@
     <main class="wrap admin">
       <div class="error" id="err"></div>
 
+      <section class="panel" id="healthPanel">
+        <h2>Health <span class="hint" id="healthSummary"></span></h2>
+        <div class="health-grid" id="healthGrid"><p class="hint">Checking…</p></div>
+        <details class="health-events" id="healthEventsBox">
+          <summary>Connection problems <span class="hint" id="healthEventsCount"></span></summary>
+          <div id="healthEvents"></div>
+        </details>
+      </section>
+
       <section class="panel">
         <h2>Invite someone</h2>
         <form class="start" id="inviteForm">
@@ -151,6 +160,43 @@
       }
     }
 
+    // ---------- health ----------
+    const fmtDur = (sec) => { const d = Math.floor(sec / 86400); const h = Math.floor((sec % 86400) / 3600); const m = Math.floor((sec % 3600) / 60);
+      return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; };
+    const gb = (b) => `${(b / 1073741824).toFixed(1)} GB`;
+    const chip = (status, title, lines) => h(`div.health-card.${status}`, {},
+      h('div.health-title', {}, h('span.health-dot', {}), title), ...lines.map((l) => h('div.hint', {}, l)));
+
+    async function refreshHealth() {
+      let hs;
+      try { hs = await api('/api/admin/health'); } catch (e) { $('healthGrid').replaceChildren(h('p.error', {}, e.message)); return; }
+      const sv = hs.server;
+      const loadPct = Math.round((sv.load[0] / sv.cpus) * 100);
+      const memPct = Math.round((sv.memUsed / sv.memTotal) * 100);
+      const serverStatus = loadPct > 90 || memPct > 90 ? 'bad' : loadPct > 60 || memPct > 80 ? 'warn' : 'ok';
+      const v = hs.video;
+      $('healthGrid').replaceChildren(
+        chip(serverStatus, 'Server', [`CPU ${loadPct}% · memory ${memPct}% of ${gb(sv.memTotal)}`, `Up ${fmtDur(sv.uptime)} · site restarted ${fmtDur(sv.appUptime)} ago`]),
+        v.status === 'ok'
+          ? chip(v.ms > 1500 ? 'warn' : 'ok', 'Video server', [`Answering in ${v.ms} ms`, `${v.rooms} room${v.rooms === 1 ? '' : 's'} · ${v.people} connected · ${v.live} live`])
+          : chip('bad', 'Video server', ['Not answering', v.error || '']),
+        chip(hs.media.status === 'skip' ? 'ok' : hs.media.status, 'Video address', [hs.media.text]),
+        chip(hs.failures24h ? 'warn' : 'ok', 'Connection problems', [hs.failures24h ? `${hs.failures24h} in the last 24 hours (details below)` : 'None in the last 24 hours']),
+      );
+      const bad = [serverStatus, v.status === 'ok' ? 'ok' : 'bad', hs.media.status].filter((x) => x === 'bad').length;
+      $('healthSummary').textContent = bad ? '· needs attention' : '· all good';
+      $('healthEventsCount').textContent = hs.events.length ? `· ${hs.events.length}` : '· none';
+      const clear = h('button.btn.sm.ghost', {}, 'Clear list');
+      confirmButton(clear, 'Clear?', async () => { await api('/api/admin/health/clear', {}); refreshHealth(); });
+      $('healthEvents').replaceChildren(...(hs.events.length ? [
+        h('table.list', {}, ...hs.events.map((e) => h('tr', {},
+          h('td', {}, h('b', {}, e.userName || 'someone'), h('div.hint', {}, ago(e.at))),
+          h('td', {}, h('div', {}, e.explain), h('div.hint', {}, [e.browser, e.ip, e.room ? `room ${e.room}` : '', e.detail?.attempts > 1 ? `tried ${e.detail.attempts} times` : ''].filter(Boolean).join(' · ')),
+            e.message ? h('div.hint.mono', {}, e.message) : null)))),
+        h('div.inline', {}, clear),
+      ] : [h('p.hint', {}, 'Nobody has had trouble connecting.')]));
+    }
+
     $('inviteForm').onsubmit = async (e) => {
       e.preventDefault();
       try {
@@ -166,6 +212,8 @@
       if (!user?.isAdmin) { location.href = '/'; return; }
       $('account').replaceWith(accountMenu(user));
       await refresh();
+      refreshHealth();
+      setInterval(() => { if (!document.hidden) refreshHealth(); }, 15000);
       // Keep it fresh, but never while you're typing (e.g. renaming someone).
       setInterval(() => {
         const typing = document.activeElement?.tagName === 'INPUT' && document.activeElement !== $('newLinkUrl');
