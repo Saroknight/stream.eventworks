@@ -63,7 +63,8 @@ streamroom-live-cli.exe "https://stream.example.com/live/ROOM#k=KEY" [options]
 
 Bump `version` in `app/Cargo.toml` and push to `main`. The **Windows app** workflow builds the
 installer and, because that version has no release yet, publishes it as `app-vX.Y.Z`. Installed
-apps pick it up within a few hours (or at their next start). Pushes that don't change the
+apps pick it up within a few hours (or at their next start). If publishing fails, any later push
+that touches `app/` tries again, as long as that version has no release yet. Pushes that don't change the
 version just build, with the installer attached to the workflow run.
 
 ## How it works

@@ -47,7 +47,10 @@ jobs:
 
   # The real installer on a fresh Ubuntu machine, then video with the normal video ports
   # blocked for the browser: it can only arrive through the port 443 relay.
+  # The relay is optional and parked, so this runs only when started by hand (Actions tab ->
+  # Site tests -> Run workflow).
   relay:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -66,7 +69,7 @@ jobs:
           getent ahostsv4 turn.stream.test
 
       - name: Install with setup.sh (local test certificates)
-        run: sudo CADDY_GLOBAL_EXTRA=local_certs bash deploy/linux/setup.sh stream.test "$IP"
+        run: sudo RELAY_443=on CADDY_GLOBAL_EXTRA=local_certs bash deploy/linux/setup.sh stream.test "$IP"
 
       - name: Installed state
         run: |

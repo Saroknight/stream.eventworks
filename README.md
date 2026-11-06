@@ -67,27 +67,27 @@ rm -rf stream.eventworks && git clone -q --depth 1 https://github.com/Saroknight
 ```
 
 The first run creates a Lightsail instance (Ubuntu, $12/month plan with 3 TB of transfer), a
-static IP, the firewall rules and the DNS records (`DOMAIN` and `turn.DOMAIN`, if the domain is in
-Route 53), installs everything and prints your **admin sign-in link**. Running the same command again deploys the
+static IP, the firewall rules and the DNS record (if the domain is in Route 53), installs everything and prints your **admin sign-in link**. Running the same command again deploys the
 latest code from GitHub and keeps your people and settings.
 
 Options before the command: `REGION=us-west-2`, `PLAN_GB=1` ($7 plan) or `4`, `NAME=...`.
 
 ## Deploy on your own Linux server (Arch or Ubuntu/Debian)
 
-1. Point a domain **and** `turn.` + that domain at the server, and open ports **80, 443, 7881 TCP**
-   and **7882, 3478 UDP**.
+1. Point a domain at the server, and open ports **80, 443, 7881 TCP** and **7882 UDP**
+   (plus **3478 UDP** and a `turn.` DNS name if you turn on the optional relay below).
 2. From a checkout of this repository: `sudo bash deploy/linux/setup.sh stream.example.com [server-ip]`
 
 Caddy provides HTTPS automatically. Logs: `journalctl -u streamroom -u livekit -u caddy -f`
 
-**Port 443 fallback.** Some networks (work, school, strict routers) block the normal video ports.
-When `turn.<domain>` points at the server, setup turns on LiveKit's TURN relay and shares port 443
+**Port 443 fallback (optional, off by default, not yet proven in production).** Some networks
+(work, school, strict routers) block the normal video ports. With `RELAY_443=on` before the deploy
+command, and `turn.<domain>` pointing at the server, setup turns on LiveKit's TURN relay and shares port 443
 between the site and the relay, told apart by name. That needs the Caddy build with the
 [layer4](https://github.com/mholt/caddy-l4) module, which setup downloads from caddyserver.com.
 The new config is validated first; on any problem setup keeps the normal config and says why.
-`RELAY_443=off` skips it. The CI job **Site tests → relay** checks this end to end with the
-video ports blocked.
+The CI job **Site tests → relay** (run by hand) checks it end to end with the video ports blocked,
+and the admin Health panel's **Test** button checks it on the live server.
 
 | Path | Contents |
 |------|----------|

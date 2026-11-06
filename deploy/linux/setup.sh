@@ -114,10 +114,10 @@ chown root:livekit /etc/livekit/livekit.yaml
 chmod 640 /etc/livekit/livekit.yaml
 
 # ---- port 443 fallback (video relay) ----
-# For viewers whose network blocks the normal video ports: LiveKit's built-in TURN relay,
-# reached on port 443 as turn.<domain>. Caddy shares 443 between the site and the relay, which
-# needs the Caddy build with the layer4 module. Any problem here: skip it and keep the
-# normal setup working.
+# Optional, off unless RELAY_443=on. For viewers whose network blocks the normal video ports:
+# LiveKit's built-in TURN relay, reached on port 443 as turn.<domain>. Caddy shares 443 between
+# the site and the relay, which needs the Caddy build with the layer4 module. Any problem here:
+# skip it and keep the normal setup working.
 TURN_DOMAIN="turn.$DOMAIN"
 RELAY=off
 CADDY_L4=/usr/local/bin/caddy-streamroom
@@ -138,8 +138,9 @@ caddy_is_ours() {
   [[ ! -f /etc/caddy/Caddyfile ]] || grep -q 'Managed by Streamroom\|/usr/share/caddy' /etc/caddy/Caddyfile \
     || [[ "$(grep -v '^[[:space:]]*\(#\|$\)' /etc/caddy/Caddyfile)" == 'import /etc/caddy/conf.d/*' ]]
 }
-if [[ "${RELAY_443:-on}" == off ]]; then
-  echo "Port 443 relay: turned off (RELAY_443=off)"
+if [[ "${RELAY_443:-off}" != on ]]; then
+  echo "Port 443 relay: off (optional; RELAY_443=on turns it on)"
+  # Re-deploys without it switch a server that had it back to the normal setup.
 elif [[ -z "$(resolve4 "$TURN_DOMAIN")" || "$(resolve4 "$TURN_DOMAIN")" != "${PUBLIC_IP:-$(resolve4 "$DOMAIN")}" ]]; then
   echo "Port 443 relay: skipped. To enable it, point $TURN_DOMAIN at this server (same address as $DOMAIN) and re-run."
 elif ! caddy_is_ours; then

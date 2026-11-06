@@ -106,8 +106,9 @@ else
     | jq -r --arg d "$DOMAIN." '[.[] | select(.[1] as $z | ($d == $z) or ($d | endswith("." + $z)))] | sort_by(.[1] | length) | last | .[0] // empty' || true)
   if [[ -n "$ZONE_ID" ]]; then
     say "Pointing $DOMAIN at $IP in Route 53"
-    # The site, and turn.<site> for the port 443 video relay.
-    for NAME_ in "$DOMAIN" "turn.$DOMAIN"; do
+    # The site, and turn.<site> if the optional port 443 video relay is on (RELAY_443=on).
+    NAMES_=("$DOMAIN"); [[ "${RELAY_443:-off}" == on ]] && NAMES_+=("turn.$DOMAIN")
+    for NAME_ in "${NAMES_[@]}"; do
       aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" --change-batch "{\"Changes\":[{\"Action\":\"UPSERT\",
         \"ResourceRecordSet\":{\"Name\":\"$NAME_\",\"Type\":\"A\",\"TTL\":60,\"ResourceRecords\":[{\"Value\":\"$IP\"}]}}]}" >/dev/null
     done
@@ -124,7 +125,7 @@ else
   done
   echo " done"
   # The relay name is optional: wait a little for it, setup.sh skips the relay if it isn't live.
-  if [[ -n "$ZONE_ID" ]]; then
+  if [[ -n "$ZONE_ID" && "${RELAY_443:-off}" == on ]]; then
     for _ in $(seq 1 24); do resolves_to_ip "turn.$DOMAIN" && break; sleep 5; done
   fi
 fi
@@ -141,7 +142,7 @@ say "Installing on the server (takes a few minutes the first time)"
 "${SSH[@]}" "set -e
   cloud-init status --wait >/dev/null 2>&1 || true
   rm -rf ~/streamroom && mkdir ~/streamroom && tar -xzf ~/streamroom.tgz -C ~/streamroom
-  sudo bash ~/streamroom/deploy/linux/setup.sh '$DOMAIN' '$IP'"
+  sudo RELAY_443='${RELAY_443:-off}' bash ~/streamroom/deploy/linux/setup.sh '$DOMAIN' '$IP'"
 
 # ---- 7. check ----
 say "Checking https://$DOMAIN"

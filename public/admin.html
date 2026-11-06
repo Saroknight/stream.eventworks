@@ -177,8 +177,10 @@
     function relayCard(relay) {
       const card = chip(relay.status, 'Port 443 fallback', [relay.text]);
       if (relayResult) card.append(h(`div.hint.${relayResult.ok ? 'ok-text' : 'error'}`, {}, relayResult.text));
-      const btn = h('button.btn.sm', { onclick: () => testRelay(btn) }, 'Test');
-      card.append(h('div.inline', {}, btn));
+      if (!relay.off) {
+        const btn = h('button.btn.sm', { onclick: () => testRelay(btn) }, 'Test');
+        card.append(h('div.inline', {}, btn));
+      }
       return card;
     }
     async function testRelay(btn) {

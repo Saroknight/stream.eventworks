@@ -85,7 +85,7 @@ async function mediaAddressCheck() {
 
 async function relayCheck() {
   if (!TURN_DOMAIN) {
-    return { status: 'warn', text: 'Off. Viewers on strict networks (work, school) may not get video. Re-deploy to turn it on.' };
+    return { status: 'ok', off: true, text: 'Off (optional). If someone\'s network blocks video, it can be turned on with RELAY_443=on when deploying.' };
   }
   let resolved = [];
   try { resolved = await dns.resolve4(TURN_DOMAIN); } catch (e) { return { status: 'bad', text: `On, but ${TURN_DOMAIN} doesn't resolve (${e.code || e.message}).` }; }
