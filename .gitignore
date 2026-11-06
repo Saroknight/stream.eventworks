@@ -4,3 +4,4 @@ data/
 app/target/
 app/desktop/gen/
 test-results/
+tests/tmp/

@@ -99,11 +99,36 @@ function fullscreen(el) {
 // ---------- layouts ----------
 function setLayout(l) { layout = l; store.set('sr.layout', l); relayout(); }
 
+// Phones: no screen sharing from a phone browser, and in landscape the top bar gets out of the way.
+const canShare = Boolean(navigator.mediaDevices?.getDisplayMedia);
+const touch = matchMedia('(hover: none)').matches;
+if (!canShare) {
+  $('liveBtn').classList.add('hidden');
+  $('emptyHint').textContent = 'Waiting for someone to go live. To stream yourself, use a computer.';
+}
+if (touch) $('audioGate').textContent = '🔊 Tap to turn on sound';
+const phoneLandscape = matchMedia('(hover: none) and (orientation: landscape) and (max-height: 520px)');
+let chromeTimer = null;
+function pokeChrome() {
+  document.body.classList.remove('chrome-hidden');
+  clearTimeout(chromeTimer);
+  if (!phoneLandscape.matches || !tiles.size) return;
+  chromeTimer = setTimeout(() => {
+    if (!document.querySelector('dialog[open]') && $('overlay').classList.contains('hidden')) document.body.classList.add('chrome-hidden');
+  }, 3500);
+}
+stage.addEventListener('click', pokeChrome, true);
+document.querySelector('.topbar').addEventListener('touchstart', pokeChrome, { passive: true });
+phoneLandscape.addEventListener?.('change', pokeChrome);
+
 function relayout() {
   const n = tiles.size;
   $('empty').classList.toggle('hidden', n > 0);
+  pokeChrome();
   document.querySelectorAll('[data-layout]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.layout === layout)));
-  const eff = n < 2 ? 'grid' : layout; // spotlight and PiP need 2+ streams
+  // Spotlight and PiP need 2+ streams; portrait phones always stack streams top to bottom.
+  const portraitPhone = matchMedia('(max-width: 600px) and (orientation: portrait)').matches;
+  const eff = n < 2 || portraitPhone ? 'grid' : layout;
   stage.className = `stage ${eff}`;
   const ordered = [...tiles.values()];
   ordered.forEach((t) => {

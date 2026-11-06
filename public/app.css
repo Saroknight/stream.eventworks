@@ -276,3 +276,25 @@ td.actions .btn { margin-left: 4px; }
 .health-events summary { cursor: pointer; font-weight: 600; }
 .health-events table { margin-top: 8px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+
+/* ---------- phones ---------- */
+/* Portrait: streams stack top to bottom at their real shape; scroll for more. */
+@media (max-width: 600px) and (orientation: portrait) {
+  .stage.grid { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .stage.grid .tile { flex: none; width: 100%; aspect-ratio: 16 / 9; }
+  .topbar { gap: 8px; padding: 8px 12px; }
+  .topbar .title { flex: 1 1 100%; order: -1; margin-right: 0; }
+  .topbar .brand .back { display: none; }
+}
+/* Landscape: the stream gets the whole screen; the bar floats on top and hides itself. */
+@media (hover: none) and (orientation: landscape) and (max-height: 520px) {
+  .viewer { position: relative; }
+  .viewer .topbar { position: absolute; top: 0; left: 0; right: 0; z-index: 6; flex-wrap: nowrap; padding: 6px 12px;
+    background: rgba(13, 14, 18, .82); backdrop-filter: blur(8px); transition: opacity .25s; }
+  .viewer .topbar .layouts, .viewer #statsBtn { display: none; }
+  .viewer > .stage { padding: 0; }
+  .stage.grid { gap: 2px; }
+  .stage .tile { border-radius: 0; }
+  body.chrome-hidden .viewer .topbar { opacity: 0; pointer-events: none; }
+  body.chrome-hidden .tile .controls, body.chrome-hidden .tile .label { opacity: 0; transition: opacity .25s; }
+}
