@@ -1,18 +1,16 @@
 name: Windows app
 
 # Every push that touches the app builds the installer (download it from the run's artifacts).
-# Pushing a tag like app-v0.2.1 also publishes a GitHub Release, which is what the site's
-# /download page and the app's auto-updater point at.
+# On main, if app/Cargo.toml has a version with no release yet, the build is published as
+# GitHub Release app-v<version>: that's what the site's /download page and the app's
+# auto-updater use. So to release: bump the version and push to main.
 
 on:
-  # Branch pushes that touch the app build it; app-v* tags build and publish a release.
-  # (Two triggers because a push filter with both branches and tags applies `paths` to tags too.)
   push:
     branches: ["**"]
     paths:
       - "app/**"
       - ".github/workflows/app.yml"
-  create:
   workflow_dispatch:
 
 concurrency:
@@ -24,8 +22,6 @@ permissions:
 
 jobs:
   windows:
-    # `create` also fires for new branches; only app-v* tags matter here.
-    if: github.event_name != 'create' || startsWith(github.ref, 'refs/tags/app-v')
     runs-on: windows-latest
     defaults:
       run:
@@ -43,13 +39,22 @@ jobs:
         with:
           workspaces: app
 
-      - name: Version check (tags only)
-        if: startsWith(github.ref, 'refs/tags/app-v')
+      - name: Should this build be released?
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}".Substring(5)
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          if ($tag -ne $ver) { throw "Tag $tag does not match Cargo.toml version $ver" }
+          $publish = 'false'
+          if ("${{ github.ref }}" -eq 'refs/heads/main') {
+            gh release view "app-v$ver" --repo "${{ github.repository }}" *> $null
+            if ($LASTEXITCODE -ne 0) { $publish = 'true' }
+          }
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          "publish=$publish" >> $env:GITHUB_OUTPUT
+          Write-Host "version $ver, publish: $publish"
+          $global:LASTEXITCODE = 0
 
       - name: Unit tests
         run: cargo test -p streamroom-core -p streamroom-desktop
@@ -82,14 +87,14 @@ jobs:
           path: app/dist/
           retention-days: 30
 
-      - name: Publish release (tags only)
-        if: startsWith(github.ref, 'refs/tags/app-v')
+      - name: Publish release
+        if: steps.rel.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $ver = "${{ github.ref_name }}".Substring(5)
-          gh release create "${{ github.ref_name }}" dist/Streamroom-Live-Setup.exe dist/SHA256SUMS dist/streamroom-live-cli.exe `
+          $ver = "${{ steps.rel.outputs.version }}"
+          gh release create "app-v$ver" --target "${{ github.sha }}" dist/Streamroom-Live-Setup.exe dist/SHA256SUMS dist/streamroom-live-cli.exe `
             --title "Streamroom Live $ver" `
             --notes "Download **Streamroom-Live-Setup.exe** below and run it. Windows may say it protected your PC: click **More info**, then **Run anyway**. Installed copies update themselves." `
             --latest
