@@ -76,6 +76,22 @@ fn parse_args() -> Result<Args> {
     Ok(a)
 }
 
+#[cfg(feature = "testsrc")]
+fn start_test_pattern(
+    control: Arc<Control>,
+    tx: mpsc::SyncSender<wincap::EncodedFrame>,
+) -> Result<(wincap::VideoInfo, std::thread::JoinHandle<()>)> {
+    testsrc::start(1280, 720, 30, 2_500_000, control, tx)
+}
+
+#[cfg(not(feature = "testsrc"))]
+fn start_test_pattern(
+    _control: Arc<Control>,
+    _tx: mpsc::SyncSender<wincap::EncodedFrame>,
+) -> Result<(wincap::VideoInfo, std::thread::JoinHandle<()>)> {
+    bail!("this build has no test pattern (built without the testsrc feature)")
+}
+
 fn prompt(question: &str, default: Option<&str>) -> Result<String> {
     match default {
         Some(d) => print!("{question} [{d}]: "),
@@ -116,7 +132,9 @@ async fn run() -> Result<()> {
     print!("Connecting to {} ... ", link.base);
     std::io::stdout().flush()?;
     let session = link::fetch_token(&link, &name).await?;
-    let (room, mut events) = Room::connect(&session.livekit_url, &session.token, RoomOptions { auto_subscribe: false, ..Default::default() })
+    let mut room_options = RoomOptions::default();
+    room_options.auto_subscribe = false;
+    let (room, mut events) = Room::connect(&session.livekit_url, &session.token, room_options)
         .await
         .with_context(|| format!("could not connect to the media server at {}", session.livekit_url))?;
     println!("connected to \"{}\"", session.title);
@@ -125,12 +143,7 @@ async fn run() -> Result<()> {
     let control = Arc::new(Control::default());
     let (frame_tx, frame_rx) = mpsc::sync_channel::<wincap::EncodedFrame>(8);
     let (info, video_thread) = if args.test_pattern {
-        #[cfg(feature = "testsrc")]
-        {
-            testsrc::start(1280, 720, 30, 2_500_000, control.clone(), frame_tx)?
-        }
-        #[cfg(not(feature = "testsrc"))]
-        bail!("this build has no test pattern (built without the testsrc feature)")
+        start_test_pattern(control.clone(), frame_tx)?
     } else {
         wincap::start_video(args.video.clone(), control.clone(), frame_tx)?
     };
