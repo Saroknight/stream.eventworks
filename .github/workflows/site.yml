@@ -117,11 +117,15 @@ jobs:
           echo "== listening"
           sudo ss -ltnup | grep -E ":443|:5349|:3478|:7881|:7882|:8443" || true
           echo "== livekit (turn / ice)"
-          sudo journalctl -u livekit --no-pager | grep -iE "turn|permission|relay|allocat|channel" | grep -v twirp | cut -c1-500 | sort | uniq -c | sort -rn | head -40 || true
+          J=$(sudo journalctl -u livekit --no-pager)
+          for k in "Received AllocateRequest" "Received CreatePermission" "Adding permission" "No Permission or Channel" "ChannelBind" "Exit read loop" "Failed" "denied" "Forbidden"; do
+            printf '%-28s %s\n' "$k" "$(echo "$J" | grep -c "$k")"
+          done
+          echo "$J" | grep -iE "CreatePermission|Adding permission|denied|forbidden|failed to|error" | grep -v twirp | cut -c1-400 | tail -25
           echo "== livekit failures"
           sudo journalctl -u livekit --no-pager | grep -E "without connection" | grep -o '"publisherCandidates".\{0,700\}' | tail -2 || true
           echo "== caddy (layer4 / tls / errors)"
-          sudo journalctl -u caddy --no-pager | grep -iE "layer4|error|tls|handshake|proxy" | cut -c1-400 | tail -40 || true
+          sudo journalctl -u caddy --no-pager | grep -iE "layer4|error|handshake|proxy|warn" | grep -v "tls.obtain\|cache.maintenance\|storage" | cut -c1-400 | tail -30 || true
 
       - name: Server logs
         if: always()

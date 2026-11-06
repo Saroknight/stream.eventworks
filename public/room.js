@@ -414,7 +414,10 @@ async function join() {
     }
     try {
       const { token, url } = await api(`/api/rooms/${encodeURIComponent(roomId)}/join`, {});
-      await room.connect(livekitUrl(url), token, { autoSubscribe: false });
+      // Troubleshooting switch: localStorage sr.forceRelay = true sends all video through the
+      // relay (what blocked networks use), to test it from any network.
+      const rtcConfig = store.get('sr.forceRelay', false) ? { iceTransportPolicy: 'relay' } : undefined;
+      await room.connect(livekitUrl(url), token, { autoSubscribe: false, rtcConfig });
       joined = true;
       return;
     } catch (e) {

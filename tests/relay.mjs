@@ -24,6 +24,8 @@ const browser = await chromium.launch({
 const errors = [];
 async function user() {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  // Relay only (the site's troubleshooting switch), on top of the blocked ports.
+  await ctx.addInitScript(() => { try { localStorage.setItem('sr.forceRelay', 'true'); } catch {} });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') console.log('  [console]', m.text()); });
