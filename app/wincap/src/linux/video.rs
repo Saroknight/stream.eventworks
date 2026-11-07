@@ -53,6 +53,9 @@ fn available(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
 }
 
+/// Sets square pixels on the screen's frames (see `Screen::source`).
+const SQUARE: &str = "capssetter caps=\"video/x-raw,pixel-aspect-ratio=(fraction)1/1\"";
+
 /// The screen part of the pipeline.
 enum Screen {
     Portal(portal::PortalStream),
@@ -64,11 +67,20 @@ impl Screen {
         match self {
             // System-memory frames: the safest path across desktops and drivers.
             Screen::Portal(p) => format!(
-                "pipewiresrc name=src fd={} path={} do-timestamp=true keepalive-time=1000 resend-last=true ! video/x-raw",
+                // Screens have square pixels. Overwrite whatever pixel shape the stream claims:
+                // KDE's can come out as 2147483647:1, which makes every scaler overflow.
+                "pipewiresrc name=src fd={} path={} do-timestamp=true keepalive-time=1000 resend-last=true ! {SQUARE}",
                 p.fd.as_raw_fd(),
                 p.node
             ),
-            Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! video/x-raw"),
+            Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! {SQUARE}"),
+        }
+    }
+    /// The screen's shape as the portal reported it (X11: unknown until it runs).
+    fn size(&self) -> Option<(u32, u32)> {
+        match self {
+            Screen::Portal(p) => p.size.filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| (w as u32, h as u32)),
+            Screen::X11 { .. } => None,
         }
     }
     fn method(&self) -> &'static str {
@@ -82,8 +94,17 @@ impl Screen {
 fn pipeline_text(screen: &Screen, enc: &Enc, opts: &VideoOptions) -> String {
     let fps = opts.fps.max(1);
     let kbps = (opts.bitrate_bps / 1000).max(500);
-    // Square pixels make the scaler pick the width that keeps the screen's shape.
-    let size = if opts.height > 0 { format!(",height={},pixel-aspect-ratio=1/1", opts.height) } else { String::new() };
+    // Output size: when the screen's shape is known, spell out width and height (even numbers,
+    // as encoders need), so nothing has to be inferred. Otherwise the height plus square pixels
+    // lets the scaler pick the width that keeps the shape.
+    let size = match (opts.height, screen.size()) {
+        (0, _) => ",pixel-aspect-ratio=1/1".to_string(),
+        (h, Some((sw, sh))) => {
+            let w = ((sw as u64 * h as u64 / sh as u64) as u32 + 1) & !1;
+            format!(",width={w},height={},pixel-aspect-ratio=1/1", h & !1)
+        }
+        (h, None) => format!(",height={h},pixel-aspect-ratio=1/1"),
+    };
     let convert = if enc.va {
         format!("vapostproc ! video/x-raw(memory:VAMemory),format=NV12{size}")
     } else {
