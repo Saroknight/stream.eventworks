@@ -101,8 +101,14 @@ pub async fn install(a: &Available) -> Result<()> {
         bail!("the downloaded installer didn't match its checksum, so it wasn't run");
     }
     let setup = std::env::temp_dir().join(format!("{}-{}", a.version, SETUP));
-    std::fs::write(&setup, &bytes).context("saving the installer")?;
-    run_after_exit(&setup)
+    // Saving and installing block (on Linux until the password is typed): keep them off the
+    // async runtime.
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(&setup, &bytes).context("saving the installer")?;
+        run_after_exit(&setup)
+    })
+    .await
+    .context("installing the update")?
 }
 
 /// Install the package (pacman asks for the password through the desktop), then start the new
@@ -114,7 +120,9 @@ fn run_after_exit(setup: &std::path::Path) -> Result<()> {
     if !status.success() {
         bail!("the update wasn't installed (password cancelled, or pacman refused it)");
     }
-    let _ = std::fs::remove_file(setup);
+    if let Err(e) = std::fs::remove_file(setup) {
+        streamroom_core::log::info(&format!("couldn't delete the downloaded update {}: {e}", setup.display()));
+    }
     // Start the new version once this one has exited.
     let pid = std::process::id();
     std::process::Command::new("sh")
