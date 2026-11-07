@@ -202,6 +202,9 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
   number into `Cargo.toml` before building (the committed `Cargo.toml` version is only for local
   builds). **To release:** bump the platform's file and push to `main`. A build is published only
   if its tag doesn't exist yet.
+- **Nothing ships without a bump.** A merged client change stays unreleased (installed apps
+  report "latest version") until the platform's file is bumped. Any PR that changes the client
+  bumps it, or says in the description why not.
 - Windows releases are `app-v*` and marked **latest** (old Windows apps and the site look at
   "latest"). Linux releases are `linux-v*` and never marked latest.
 - Each updater only looks at its own platform's tags (`TAG` in `update.rs`); the site's
@@ -295,3 +298,6 @@ Not started unless the owner picks them:
 6. Split Windows and Linux into separate builds and releases (Linux 0.4.3+).
 7. GNOME fixes: media type (0.4.5, Studdder), frame cap (0.4.6, regressed; fixed 0.4.7 by
    Studdder with FrameGate), audio pipeline leak (0.4.7).
+8. Linux 0.4.8: quality pass (fmt/clippy in CI, shared GStreamer pipeline helper, encoder enum,
+   real frame counters, 0600 `account.dat`, updater off the async runtime) and "Check for
+   updates" in the ⋯ menu.
