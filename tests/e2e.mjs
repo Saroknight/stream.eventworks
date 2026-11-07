@@ -239,7 +239,12 @@ async function main() {
       const r = await fetch(`${BASE}/api/app/latest`);
       expect(r.ok, `/api/app/latest ${r.status}`);
       await anon.page.goto(`${BASE}/download`);
-      await anon.page.waitForSelector('#dlBtn');
+      // Shows the Windows or the Linux instructions depending on the visitor's system.
+      await anon.page.waitForSelector('#dlBtn:visible, #linuxCmd:visible');
+      await anon.page.click('.os-switch [data-os="windows"]');
+      await anon.page.waitForSelector('#dlBtn:visible');
+      await anon.page.click('.os-switch [data-os="linux"]');
+      await anon.page.waitForSelector('#linuxCmd:visible');
       const dl = await fetch(`${BASE}/api/app/download`, { redirect: 'manual' });
       expect(dl.status === 302, `/api/app/download ${dl.status}`);
     });
