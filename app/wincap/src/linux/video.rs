@@ -88,9 +88,14 @@ impl Screen {
         match self {
             // System-memory frames: the safest path across desktops and drivers.
             Screen::Portal(p) => format!(
+                // Say this is a video stream: WirePlumber only links nodes of the same media type,
+                // and recent pipewiresrc connects as "Unknown", which matches no screen
+                // ("target not found" for every target; seen on GNOME, PipeWire 1.6).
                 // Screens have square pixels. Overwrite whatever pixel shape the stream claims:
                 // KDE's can come out as 2147483647:1, which makes every scaler overflow.
-                "pipewiresrc name=src fd={} {target} do-timestamp=true keepalive-time=1000 resend-last=true ! {SQUARE}",
+                "pipewiresrc name=src fd={} {target} \
+                 stream-properties=\"props,media.type=Video,media.category=Capture,media.role=Screen\" \
+                 do-timestamp=true keepalive-time=1000 resend-last=true ! {SQUARE}",
                 p.fd.as_raw_fd(),
             ),
             Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! {SQUARE}"),
@@ -202,31 +207,55 @@ fn try_start(text: &str) -> Result<Running> {
     }
 }
 
-/// What PipeWire shows on the portal's connection (the shared screen should be listed).
-fn visible_nodes(p: &portal::PortalStream) -> String {
-    let Some(provider) = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider") else {
-        return "can't check: no PipeWire device provider".into();
-    };
-    let Ok(fd) = p.fd.try_clone() else { return "can't check: fd".into() };
+/// A node PipeWire shows on the portal's connection.
+struct Node {
+    name: String,
+    class: String,
+    id: String,
+    serial: String,
+}
+
+/// The nodes on the portal's connection (the shared screen should be listed).
+fn portal_nodes(p: &portal::PortalStream) -> std::result::Result<Vec<Node>, &'static str> {
+    let provider = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider").ok_or("no PipeWire device provider")?;
+    let fd = p.fd.try_clone().map_err(|_| "fd")?;
     if provider.find_property("fd").is_none() {
-        return "can't check: device provider has no fd".into();
+        return Err("device provider has no fd");
     }
     provider.set_property("fd", fd.as_raw_fd());
-    if provider.start().is_err() {
-        return "can't check: couldn't connect".into();
-    }
-    let list: Vec<String> = provider
+    provider.start().map_err(|_| "couldn't connect")?;
+    let list = provider
         .devices()
         .iter()
         .map(|d| {
             let props = d.properties();
             let get = |k: &str| props.as_ref().and_then(|s| s.get::<String>(k).ok()).unwrap_or_default();
-            format!("{} [{}; id {}; serial {}]", d.display_name(), d.device_class(), get("object.id"), get("object.serial"))
+            Node { name: d.display_name().into(), class: d.device_class().into(), id: get("object.id"), serial: get("object.serial") }
         })
         .collect();
     provider.stop();
     drop(fd);
-    if list.is_empty() { "nothing".into() } else { list.join(", ") }
+    Ok(list)
+}
+
+/// The screen stream's serial, looked up on the connection when the portal didn't report it
+/// (GNOME doesn't).
+fn lookup_serial(p: &portal::PortalStream) -> Option<u64> {
+    let node = p.node.to_string();
+    portal_nodes(p).ok()?.into_iter().find(|n| n.id == node)?.serial.parse().ok()
+}
+
+/// What PipeWire shows on the portal's connection, for troubleshooting.
+fn visible_nodes(p: &portal::PortalStream) -> String {
+    match portal_nodes(p) {
+        Err(e) => format!("can't check: {e}"),
+        Ok(list) if list.is_empty() => "nothing".into(),
+        Ok(list) => list
+            .iter()
+            .map(|n| format!("{} [{}; id {}; serial {}]", n.name, n.class, n.id, n.serial))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
 }
 
 /// Tries each available encoder in order; the first that produces video wins.
@@ -274,7 +303,11 @@ pub fn start_video(
     }
     let open_screen = |remember: bool| -> Result<Screen> {
         Ok(if use_portal {
-            Screen::Portal(portal::open(control.clone(), opts.cursor, remember)?)
+            let mut p = portal::open(control.clone(), opts.cursor, remember)?;
+            if p.serial.is_none() {
+                p.serial = lookup_serial(&p);
+            }
+            Screen::Portal(p)
         } else {
             Screen::X11 { cursor: opts.cursor }
         })
