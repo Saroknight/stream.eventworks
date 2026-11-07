@@ -36,7 +36,12 @@ fn main() -> anyhow::Result<()> {
         }
     }
     control.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    println!("mode: {desc}; samples: {}; 440 Hz: {:.4}; 880 Hz: {:.4}; errors: {:?}",
-        left.len(), goertzel(&left, 440.0, 48000.0), goertzel(&left, 880.0, 48000.0), control.take_errors());
+    println!(
+        "mode: {desc}; samples: {}; 440 Hz: {:.4}; 880 Hz: {:.4}; errors: {:?}",
+        left.len(),
+        goertzel(&left, 440.0, 48000.0),
+        goertzel(&left, 880.0, 48000.0),
+        control.take_errors()
+    );
     Ok(())
 }

@@ -4,6 +4,8 @@
 //! (wincap: DXGI Desktop Duplication -> hardware H.264), publishes the already-encoded video
 //! plus PC audio, and reports stats. Stopping it, or the room ending, tears everything down.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 pub mod api;
 pub mod link;
 pub mod log;
@@ -12,7 +14,7 @@ mod testsrc;
 
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -162,7 +164,7 @@ impl Session {
                         livekit::DisconnectReason::ClientInitiated => return,
                         other => format!("Disconnected from the server ({other:?})."),
                     };
-                    *ended2.lock().unwrap() = Some(msg);
+                    *ended2.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg);
                     control2.stop.store(true, Ordering::Relaxed);
                     return;
                 }
@@ -170,17 +172,20 @@ impl Session {
         });
 
         let now = Instant::now();
-        let live = LiveInfo {
-            room_title: joined.title,
-            server: server.to_string(),
-            video: info.0,
-            bitrate_mbps: settings.bitrate_mbps,
-            audio: info.1,
-        };
+        let live =
+            LiveInfo { room_title: joined.title, server: server.to_string(), video: info.0, bitrate_mbps: settings.bitrate_mbps, audio: info.1 };
         log::info(&format!(
             "live: {} {}x{} -> {}x{} @ {} fps, {} ({:.1} Mbps), GPU {}, audio {}",
-            live.video.capture_method, live.video.source_width, live.video.source_height, live.video.width,
-            live.video.height, live.video.fps, live.video.encoder, live.bitrate_mbps, live.video.adapter, live.audio
+            live.video.capture_method,
+            live.video.source_width,
+            live.video.source_height,
+            live.video.width,
+            live.video.height,
+            live.video.fps,
+            live.video.encoder,
+            live.bitrate_mbps,
+            live.video.adapter,
+            live.audio
         ));
         Ok((Session { control, room, ended, threads, events, meter: Mutex::new(Meter { at: now, started: now, prev: (0, 0, 0, 0) }) }, live))
     }
@@ -190,7 +195,13 @@ impl Session {
         let (frame_tx, frame_rx) = mpsc::sync_channel::<wincap::EncodedFrame>(8);
         let (info, video_thread) = match source {
             Source::Screen => wincap::start_video(
-                wincap::VideoOptions { height: settings.height, fps: settings.fps, bitrate_bps: bitrate, monitor: settings.monitor, cursor: settings.cursor },
+                wincap::VideoOptions {
+                    height: settings.height,
+                    fps: settings.fps,
+                    bitrate_bps: bitrate,
+                    monitor: settings.monitor,
+                    cursor: settings.cursor,
+                },
                 control.clone(),
                 frame_tx,
             )?,
@@ -298,7 +309,7 @@ impl Session {
     /// Frame rates and bitrate since the previous call.
     pub fn stats(&self) -> Stats {
         let s = &self.control.stats;
-        let mut m = self.meter.lock().unwrap();
+        let mut m = self.meter.lock().unwrap_or_else(PoisonError::into_inner);
         let now = (
             s.captured.load(Ordering::Relaxed),
             s.encoded.load(Ordering::Relaxed),
@@ -322,7 +333,7 @@ impl Session {
 
     /// Why the session ended on its own (room ended, removed, capture failed), if it did.
     pub fn ended(&self) -> Option<String> {
-        if let Some(m) = self.ended.lock().unwrap().clone() {
+        if let Some(m) = self.ended.lock().unwrap_or_else(PoisonError::into_inner).clone() {
             return Some(m);
         }
         let errors = self.control.take_errors();
@@ -331,7 +342,7 @@ impl Session {
         }
         if let Some(e) = errors.iter().find(|e| e.starts_with("video stopped")) {
             let msg = format!("Screen capture stopped: {}", e.trim_start_matches("video stopped: "));
-            *self.ended.lock().unwrap() = Some(msg.clone());
+            *self.ended.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg.clone());
             return Some(msg);
         }
         if self.control.stop.load(Ordering::Relaxed) {
@@ -405,11 +416,19 @@ pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
     control.stop.store(true, Ordering::Relaxed);
     drop(rx);
     let _ = thread.join();
+    let st = &control.stats;
+    let (captured, submitted) = (st.captured.load(Ordering::Relaxed), st.submitted.load(Ordering::Relaxed));
     Ok(format!(
-        "Capture:  {} {}x{} -> {}x{} @ {} fps\nEncoder:  {}\nResult:   {frames} frames ({keys} keyframes, {:.1} Mbps) in {seconds} s{}",
-        info.capture_method, info.source_width, info.source_height, info.width, info.height, info.fps, info.encoder,
+        "Capture:  {} {}x{} -> {}x{} @ {} fps\nEncoder:  {}\nResult:   {frames} frames ({keys} keyframes, {:.1} Mbps) in {seconds} s\n\
+         Screen:   {captured} frames captured, {submitted} sent to the encoder (the rest were over the fps cap){}",
+        info.capture_method,
+        info.source_width,
+        info.source_height,
+        info.width,
+        info.height,
+        info.fps,
+        info.encoder,
         bytes as f64 * 8.0 / seconds as f64 / 1e6,
         if frames == 0 { "\nNo frames arrived: the screen stream started but sent nothing." } else { "" }
     ))
 }
-

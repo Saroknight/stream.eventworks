@@ -28,11 +28,7 @@ fn output_size(src_w: u32, src_h: u32, height: u32) -> (u32, u32) {
     (w & !1, h & !1)
 }
 
-pub fn start_video(
-    opts: VideoOptions,
-    control: Arc<Control>,
-    tx: SyncSender<EncodedFrame>,
-) -> Result<(VideoInfo, JoinHandle<()>)> {
+pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<EncodedFrame>) -> Result<(VideoInfo, JoinHandle<()>)> {
     let (info_tx, info_rx) = mpsc::channel::<Result<VideoInfo>>();
     let handle = std::thread::Builder::new().name("video".into()).spawn(move || {
         let ready = info_tx.clone();
@@ -48,12 +44,7 @@ pub fn start_video(
     Ok((info, handle))
 }
 
-fn run(
-    opts: VideoOptions,
-    control: Arc<Control>,
-    tx: SyncSender<EncodedFrame>,
-    info_tx: mpsc::Sender<Result<VideoInfo>>,
-) -> Result<()> {
+fn run(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<EncodedFrame>, info_tx: mpsc::Sender<Result<VideoInfo>>) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED).ok().context("CoInitializeEx")?;
         MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup")?;
@@ -68,12 +59,7 @@ fn run(
     result
 }
 
-fn run_inner(
-    opts: VideoOptions,
-    control: Arc<Control>,
-    tx: SyncSender<EncodedFrame>,
-    info_tx: mpsc::Sender<Result<VideoInfo>>,
-) -> Result<()> {
+fn run_inner(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<EncodedFrame>, info_tx: mpsc::Sender<Result<VideoInfo>>) -> Result<()> {
     let fps = opts.fps.clamp(1, 240);
     let gpu = crate::d3d::open(opts.monitor)?;
     let mut dup = Duplicator::new(&gpu.output, &gpu.device)?;
@@ -235,12 +221,7 @@ fn run_inner(
 
 /// Stages the desktop image, rebuilding the converter if the desktop changed size or format
 /// (resolution switch). The output size stays the same, so the encoder keeps running.
-fn stage_checked(
-    conv: &mut Converter,
-    gpu: &crate::d3d::Gpu,
-    tex: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
-    fps: u32,
-) -> Result<()> {
+fn stage_checked(conv: &mut Converter, gpu: &crate::d3d::Gpu, tex: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, fps: u32) -> Result<()> {
     let d = texture_desc(tex);
     if d.Width != conv.src_width || d.Height != conv.src_height || d.Format != conv.src_format {
         let out = conv.output_size();

@@ -2,7 +2,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 static PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
@@ -15,11 +15,11 @@ pub fn set_path(path: PathBuf) {
     if std::fs::metadata(&path).map(|m| m.len() > 2_000_000).unwrap_or(false) {
         let _ = std::fs::rename(&path, path.with_extension("old.log"));
     }
-    *PATH.lock().unwrap() = Some(path);
+    *PATH.lock().unwrap_or_else(PoisonError::into_inner) = Some(path);
 }
 
 pub fn path() -> PathBuf {
-    PATH.lock().unwrap().clone().unwrap_or_else(|| std::env::temp_dir().join("streamroom-live.log"))
+    PATH.lock().unwrap_or_else(PoisonError::into_inner).clone().unwrap_or_else(|| std::env::temp_dir().join("streamroom-live.log"))
 }
 
 pub fn info(line: &str) {

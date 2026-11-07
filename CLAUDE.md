@@ -74,8 +74,8 @@ app/                 Streamroom Live (see below)
 | Crate | What |
 |---|---|
 | `core/` | Server API client (`api.rs`: pair, me, rooms, create/end room, app token, sign out, report), app link parsing (`parse_launch`), `Settings`, `Session` (connect to LiveKit, publish video + audio), `capture_test`, logging |
-| `wincap/` | Capture + encode. Windows: `capture.rs` (DXGI duplication), `convert.rs`/`d3d.rs` (GPU NV12), `encoder.rs` (Media Foundation H.264), `audio.rs` (WASAPI, per-app process loopback), `pipeline.rs`, `cursor.rs`. Linux: `src/linux/` (`portal.rs`, `video.rs`, `audio.rs`, `mod.rs`) |
-| `desktop/` | The Tauri app: `main.rs` (commands, deep links, single instance, tray, account), `account.rs` (Windows DPAPI key storage), `update.rs` (self-updater), `ui/` (plain HTML/JS/CSS window) |
+| `wincap/` | Capture + encode. Windows: `capture.rs` (DXGI duplication), `convert.rs`/`d3d.rs` (GPU NV12), `encoder.rs` (Media Foundation H.264), `audio.rs` (WASAPI, per-app process loopback), `pipeline.rs`, `cursor.rs`. Linux: `src/linux/` (`portal.rs`, `video.rs`, `audio.rs`, `launch.rs` (shared GStreamer pipeline setup, shutdown, bus errors), `mod.rs`) |
+| `desktop/` | The Tauri app: `main.rs` (commands, deep links, single instance, tray, account), `account.rs` (key storage: DPAPI on Windows, a 0600 file on Linux), `update.rs` (self-updater), `ui/` (plain HTML/JS/CSS window) |
 | `cli/` | `streamroom-live-cli`, same engine from a terminal (troubleshooting, CI e2e, `--capture-test`) |
 | `packaging/arch/` | PKGBUILD + .desktop file (registers `x-scheme-handler/streamroom`) |
 | `release/` | `windows` and `linux`: each platform's version number (see Releasing) |
@@ -95,7 +95,7 @@ app/                 Streamroom Live (see below)
   key**: a 90-day session sent as `Authorization: Bearer`, flagged `viaApp`, **never allowed
   on admin routes** (`requireAdmin` rejects it), revocable per device on the Admin page.
   Stored as `account.dat` in the app's config folder: DPAPI-encrypted on Windows, a plain file
-  on Linux (see backlog).
+  readable only by the user (0600) on Linux (see backlog).
 - **LiveKit tokens** are minted per join (`rooms.js`, TTL 8h). Rooms are created only by the
   server (`auto_create: false` in LiveKit), so ended rooms stay ended.
 - Legacy routes still exist and are candidates for removal: `POST /api/token` and the old
@@ -182,6 +182,7 @@ the external-protocol prompt wedges a tab (do that step in its own tab); Chrome 
 cd app
 cargo build -p streamroom-cli --features testsrc     # console tool (+ test pattern)
 cargo test -p streamroom-core -p streamroom-desktop -p wincap
+cargo fmt --check && cargo clippy --workspace --all-targets --features streamroom-cli/testsrc -- -D warnings
 cd desktop && npx @tauri-apps/cli@2 build            # the app (Windows: NSIS installer)
 streamroom-live-cli --capture-test                   # capture + encode 5 s, no server
 ```
@@ -195,7 +196,7 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
 |---|---|---|
 | `site.yml` | any push not under `app/` and not `*.md`; PRs | e2e test; `relay` job only by hand |
 | `app-windows.yml` | `app/**` except Linux-only paths | NSIS installer + CLI; publishes `app-vX.Y.Z` |
-| `app-linux.yml` | `app/**` except Windows-only paths | unit tests, app, CLI, pacman package (built in an `archlinux:base-devel` container); publishes `linux-vX.Y.Z` |
+| `app-linux.yml` | `app/**` except Windows-only paths | fmt + clippy (`-D warnings`), unit tests, app, CLI, pacman package (built in an `archlinux:base-devel` container); publishes `linux-vX.Y.Z` |
 
 - **Versions are per platform:** `app/release/windows` and `app/release/linux`. CI writes that
   number into `Cargo.toml` before building (the committed `Cargo.toml` version is only for local
@@ -207,10 +208,13 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
   `appinfo.js` picks the newest `app-v*` release with the installer, and the newest Linux package
   for `/api/app/download/linux`.
 - Windows-only paths (Linux workflow ignores them): `wincap/src/{audio,capture,convert,cursor,d3d,
-  encoder,pipeline}.rs`, `desktop/src/account.rs`, `desktop/icons/icon.ico`, `release/windows`.
+  encoder,pipeline}.rs`, `desktop/icons/icon.ico`, `release/windows`. (`desktop/src/account.rs`
+  is shared: Linux stores the key there too.)
   Linux-only paths (Windows workflow ignores them): `wincap/src/linux/**`, `packaging/**`,
   `release/linux`. `app/README.md` builds neither. Everything else in `app/` builds both.
-- The Windows build is much slower than Linux; unit tests run only on Linux.
+- The Windows build is much slower than Linux; unit tests, `cargo fmt --check` and clippy run only on
+  Linux, so clippy never sees `#[cfg(windows)]` code. Style is `app/rustfmt.toml` (wide lines, matching
+  the code). `wincap` and `core` deny `unwrap()` outside tests (clippy).
 - Tag pushes and GitHub's GraphQL API aren't available from some Claude environments; this
   release flow (version file + push) was chosen so no tag push is needed. `gh api` (REST) works
   for runs and releases.
@@ -265,8 +269,14 @@ Not started unless the owner picks them:
   updates; shorter LiveKit token TTL than 8h; remove the legacy `/token` and `#k=` app links;
   CSP and HSTS headers on the site; a CSP for the app window; decide on invite-link lifetime and
   reuse; scheduled Lightsail snapshots for backups; on Linux, store the app key encrypted
-  (Secret Service/libsecret) or at least write `account.dat` with 0600 permissions (today it's a
-  plain file with the default umask, see `desktop/src/account.rs`).
+  (Secret Service/libsecret); today `account.dat` is a plain file with 0600 permissions.
+- Windows per-app sound (`activate_process_loopback` in `wincap/src/audio.rs`): on the 5 s
+  timeout the function returns while the activation may still be pending, freeing the stack
+  `params` its PROPVARIANT blob points at (use-after-free if Windows reads it later). Fix: heap
+  allocate `params`/`PROPVARIANT` owned by the `Done` completion handler (Windows holds it until
+  `ActivateCompleted`), narrow the whole-function `unsafe` block to the two calls with `SAFETY`
+  comments, move the condvar wait into a safe helper (removes the last two `unwrap()`s that fail
+  Windows-target clippy). Own branch; needs testing on Windows.
 - Port 443 relay: parked; revisit only if someone's network actually blocks the video ports.
 - Linux: confirm 0.4.7+ streams cleanly at the set fps on the tester's GNOME machine, including
   per-app sound. No Flatpak/other distros planned; Steam Deck and OBS integration explicitly out

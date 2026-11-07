@@ -17,7 +17,6 @@ on:
       - "!app/wincap/src/d3d.rs"
       - "!app/wincap/src/encoder.rs"
       - "!app/wincap/src/pipeline.rs"
-      - "!app/desktop/src/account.rs"
       - "!app/desktop/icons/icon.ico"
       - "!app/release/windows"
       - "!app/README.md"
@@ -65,9 +64,20 @@ jobs:
           sed -i "0,/^version = .*/s//version = \"$VER\"/" Cargo.toml
           echo "version=$VER" >> "$GITHUB_OUTPUT"; echo "Linux $VER"
 
+      # Seconds, and before anything slow, so a formatting slip fails fast. Style: app/rustfmt.toml.
+      - name: Formatting
+        working-directory: app
+        run: cargo fmt --check
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
+
+      # Covers shared and Linux code; Windows-only files aren't compiled here.
+      # --release: reuses the release build's build scripts and macros (see Unit tests).
+      - name: Lints (clippy)
+        working-directory: app
+        run: cargo clippy --release --workspace --all-targets --features streamroom-cli/testsrc -- -D warnings
 
       - name: Unit tests
         working-directory: app

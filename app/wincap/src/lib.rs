@@ -9,6 +9,8 @@
 //! Audio: WASAPI loopback: everything the PC plays, everything except Discord, or only chosen
 //! apps (per-app process loopback on Windows 10 build 20348+ / Windows 11).
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// One compressed H.264 access unit in Annex B format (start codes), SPS/PPS included on keyframes.
@@ -134,9 +136,9 @@ mod audio;
 #[cfg(windows)]
 mod capture;
 #[cfg(windows)]
-mod cursor;
-#[cfg(windows)]
 mod convert;
+#[cfg(windows)]
+mod cursor;
 #[cfg(windows)]
 mod d3d;
 #[cfg(windows)]

@@ -3,13 +3,13 @@
 
 use std::mem::ManuallyDrop;
 
+use crate::cursor::{CursorPainter, CursorState};
 use anyhow::{anyhow, Context, Result};
 use windows::core::Interface;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::*;
-use crate::cursor::{CursorPainter, CursorState};
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT, DXGI_FORMAT_NV12,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
     DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 
@@ -88,8 +88,7 @@ impl Converter {
                 Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPIV { MipSlice: 0, ArraySlice: 0 } },
             };
             let mut input_view = None;
-            vdev.CreateVideoProcessorInputView(&composite, &enumerator, &in_desc, Some(&mut input_view))
-                .context("CreateVideoProcessorInputView")?;
+            vdev.CreateVideoProcessorInputView(&composite, &enumerator, &in_desc, Some(&mut input_view)).context("CreateVideoProcessorInputView")?;
             let input_view = input_view.ok_or_else(|| anyhow!("no input view"))?;
 
             let out_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
@@ -123,9 +122,8 @@ impl Converter {
             vctx.VideoProcessorSetStreamSourceRect(&processor, 0, true, Some(&src_rect));
             vctx.VideoProcessorSetStreamDestRect(&processor, 0, true, Some(&dst_rect));
             vctx.VideoProcessorSetOutputTargetRect(&processor, true, Some(&target));
-            let black = D3D11_VIDEO_COLOR {
-                Anonymous: D3D11_VIDEO_COLOR_0 { YCbCr: D3D11_VIDEO_COLOR_YCbCrA { Y: 0.0625, Cb: 0.5, Cr: 0.5, A: 1.0 } },
-            };
+            let black =
+                D3D11_VIDEO_COLOR { Anonymous: D3D11_VIDEO_COLOR_0 { YCbCr: D3D11_VIDEO_COLOR_YCbCrA { Y: 0.0625, Cb: 0.5, Cr: 0.5, A: 1.0 } } };
             vctx.VideoProcessorSetOutputBackgroundColor(&processor, true, &black);
 
             Ok(Self {
