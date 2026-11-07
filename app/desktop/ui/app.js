@@ -65,7 +65,9 @@ function render() {
   const st = snap.status;
   const signedIn = Boolean(snap.account);
   $('whoLine').textContent = signedIn ? `${snap.account.name} · ${snap.account.host}` : `version ${snap.version}`;
-  $('menuWrap').classList.toggle('hidden', !signedIn);
+  // The menu is always there (Check for updates); the account items only when signed in.
+  $('openSiteBtn').classList.toggle('hidden', !signedIn);
+  $('signOutBtn').classList.toggle('hidden', !signedIn);
   $('startTitle').placeholder = signedIn ? `${snap.account.name}'s room` : '';
   // The paste box is the fallback for signing in; keep it out of the way once signed in.
   $('pasteBox').classList.toggle('hidden', signedIn && st.kind !== 'error');
@@ -277,6 +279,20 @@ $('updateBtn').onclick = async () => {
 $('menuBtn').onclick = (e) => { e.stopPropagation(); $('menu').classList.toggle('hidden'); };
 document.addEventListener('click', () => $('menu').classList.add('hidden'));
 $('openSiteBtn').onclick = () => call('open_site');
+$('checkUpdateBtn').onclick = async () => {
+  const btn = $('checkUpdateBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  toast('Checking for updates…', 10000);
+  try {
+    const u = await call('check_update'); // a failure is shown by call()
+    toast(u ? `Version ${u.version} is ready. Update from the banner above.` : `You have the latest version (${snap.version}).`);
+  } catch {
+    // already shown
+  } finally {
+    btn.disabled = false;
+  }
+};
 confirmButton($('signOutBtn'), 'Click again to sign out', async () => { await call('sign_out'); rooms = []; renderRooms(); });
 
 // ---------- other actions ----------
