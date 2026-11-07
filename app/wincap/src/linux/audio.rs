@@ -109,10 +109,12 @@ fn pipeline_text(plan: &Plan) -> String {
                 "audiomixer name=mix latency=20000000 ! {tail} \
                  audiotestsrc is-live=true wave=silence ! audioconvert ! audioresample ! {caps} ! mix."
             );
+            // media.type=Audio: WirePlumber only links nodes of the same media type, and recent
+            // pipewiresrc connects as "Unknown" unless told (then: "target not found").
             for serial in serials {
                 s.push_str(&format!(
                     " pipewiresrc target-object={serial} always-copy=true \
-                     stream-properties=\"props,node.dont-reconnect=true,media.role=Production\" \
+                     stream-properties=\"props,node.dont-reconnect=true,media.type=Audio,media.category=Capture,media.role=Production\" \
                      ! audioconvert ! audioresample ! {caps} ! queue max-size-time=200000000 leaky=downstream ! mix."
                 ));
             }
