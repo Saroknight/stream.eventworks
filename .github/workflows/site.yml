@@ -1,4 +1,5 @@
 name: "Website: E2E tests"
+run-name: "E2E tests · ${{ github.event_name == 'pull_request' && format('PR #{0}: {1}', github.event.pull_request.number, github.event.pull_request.title) || github.event_name == 'workflow_dispatch' && format('{0} · manual run (with relay test)', github.ref_name) || format('{0} · {1}', github.ref_name, github.event.head_commit.message) }}"
 
 # On every push: start LiveKit and the site on a fresh machine and drive real browsers through
 # sign-in, invites, rooms, streaming and the app hand-off (tests/e2e.mjs).

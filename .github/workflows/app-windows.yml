@@ -1,4 +1,5 @@
 name: "Client app: Windows build"
+run-name: "Windows build · ${{ github.ref_name }} · ${{ github.event_name == 'workflow_dispatch' && 'manual run' || github.event.head_commit.message }}"
 
 # Builds the Windows installer when Windows or shared app code changes (Linux-only changes
 # don't start it). To release: bump app/release/windows and push to main; it's published as
