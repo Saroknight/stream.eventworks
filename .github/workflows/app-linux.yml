@@ -17,7 +17,6 @@ on:
       - "!app/wincap/src/d3d.rs"
       - "!app/wincap/src/encoder.rs"
       - "!app/wincap/src/pipeline.rs"
-      - "!app/desktop/src/account.rs"
       - "!app/desktop/icons/icon.ico"
       - "!app/release/windows"
       - "!app/README.md"
