@@ -84,7 +84,7 @@ struct Snapshot {
 // ---------- status ----------
 
 fn is_busy(app: &AppHandle) -> bool {
-    matches!(*app.state::<AppState>().status.lock().unwrap(), Status::Live { .. } | Status::Connecting { .. })
+    matches!(*app.state::<AppState>().status.lock().unwrap_or_else(PoisonError::into_inner), Status::Live { .. } | Status::Connecting { .. })
 }
 
 fn set_status(app: &AppHandle, status: Status) {
@@ -95,8 +95,8 @@ fn set_status(app: &AppHandle, status: Status) {
         Status::Connecting { .. } => "Streamroom Live: connecting…".into(),
         _ => "Streamroom Live".into(),
     };
-    *state.status.lock().unwrap() = status.clone();
-    if let Some(item) = state.tray_stop.lock().unwrap().as_ref() {
+    *state.status.lock().unwrap_or_else(PoisonError::into_inner) = status.clone();
+    if let Some(item) = state.tray_stop.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
         let _ = item.set_enabled(live);
     }
     if let Some(tray) = app.tray_by_id("main") {
@@ -120,7 +120,7 @@ fn config_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 fn current_account(app: &AppHandle) -> Option<Account> {
-    app.state::<AppState>().account.lock().unwrap().clone()
+    app.state::<AppState>().account.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 fn set_account(app: &AppHandle, a: Option<Account>) {
@@ -135,7 +135,7 @@ fn set_account(app: &AppHandle, a: Option<Account>) {
         }
     }
     let view = account_view(&a);
-    *app.state::<AppState>().account.lock().unwrap() = a;
+    *app.state::<AppState>().account.lock().unwrap_or_else(PoisonError::into_inner) = a;
     let _ = app.emit("account", view);
 }
 
@@ -160,14 +160,14 @@ async fn begin(app: AppHandle, target: Target) {
     let state = app.state::<AppState>();
     let mut slot = state.session.lock().await;
     // Already live in that room: nothing to do but show the window.
-    if slot.is_some() && state.target.lock().unwrap().as_ref() == Some(&target) {
+    if slot.is_some() && state.target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() == Some(&target) {
         return;
     }
     if let Some(s) = slot.take() {
         s.stop().await;
     }
-    *state.target.lock().unwrap() = Some(target.clone());
-    let settings = state.settings.lock().unwrap().clone();
+    *state.target.lock().unwrap_or_else(PoisonError::into_inner) = Some(target.clone());
+    let settings = state.settings.lock().unwrap_or_else(PoisonError::into_inner).clone();
     let started = match &target {
         Target::Legacy(link) => {
             set_status(&app, Status::Connecting { server: link.base.clone() });
@@ -270,7 +270,7 @@ fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
         // The same link can arrive twice (second-launch arguments and the open-url event).
         {
             static LAST: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
-            let mut last = LAST.lock().unwrap();
+            let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some((prev, at)) = last.as_ref() {
                 if *prev == a && at.elapsed() < std::time::Duration::from_secs(10) {
                     return;
@@ -312,7 +312,8 @@ fn redact(link: &str) -> String {
             skip = true;
             continue;
         }
-        let c = rest.chars().next().unwrap();
+        // `i` stays on a character boundary below the end, so there is always one.
+        let Some(c) = rest.chars().next() else { break };
         if skip && (c == '&' || c == '#') {
             skip = false;
         }
@@ -347,16 +348,16 @@ fn load_settings(app: &AppHandle) -> Settings {
 #[tauri::command]
 fn get_state(state: State<'_, AppState>) -> Snapshot {
     Snapshot {
-        status: state.status.lock().unwrap().clone(),
-        account: account_view(&state.account.lock().unwrap()),
-        room: match state.target.lock().unwrap().as_ref() {
+        status: state.status.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+        account: account_view(&state.account.lock().unwrap_or_else(PoisonError::into_inner)),
+        room: match state.target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             Some(Target::Room(id)) => Some(id.clone()),
             _ => None,
         },
-        settings: state.settings.lock().unwrap().clone(),
+        settings: state.settings.lock().unwrap_or_else(PoisonError::into_inner).clone(),
         monitors: streamroom_core::list_monitors(),
         version: env!("CARGO_PKG_VERSION"),
-        update: state.update.lock().unwrap().clone(),
+        update: state.update.lock().unwrap_or_else(PoisonError::into_inner).clone(),
         log_path: log::path().display().to_string(),
     }
 }
@@ -402,7 +403,8 @@ async fn create_room(app: AppHandle, title: String) -> Result<(), String> {
 #[tauri::command]
 async fn end_room(app: AppHandle, room: String) -> Result<(), String> {
     let api = api(&app)?;
-    let streaming_there = matches!(app.state::<AppState>().target.lock().unwrap().as_ref(), Some(Target::Room(r)) if *r == room);
+    let streaming_there =
+        matches!(app.state::<AppState>().target.lock().unwrap_or_else(PoisonError::into_inner).as_ref(), Some(Target::Room(r)) if *r == room);
     api.end_room(&room).await.map_err(|e| explain(&app, e))?;
     if streaming_there {
         end(&app, Some("You ended the room.".into())).await;
@@ -464,7 +466,7 @@ async fn stop(app: AppHandle) {
 /// Go live again in the same place (e.g. to apply new settings while live).
 #[tauri::command]
 async fn restart(app: AppHandle) -> Result<(), String> {
-    let target = app.state::<AppState>().target.lock().unwrap().clone().ok_or("Not streaming.")?;
+    let target = app.state::<AppState>().target.lock().unwrap_or_else(PoisonError::into_inner).clone().ok_or("Not streaming.")?;
     end(&app, None).await;
     begin(app, target).await;
     Ok(())
@@ -479,12 +481,13 @@ fn dismiss(app: AppHandle) {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
-    *app.state::<AppState>().settings.lock().unwrap() = settings.clone();
+    *app.state::<AppState>().settings.lock().unwrap_or_else(PoisonError::into_inner) = settings.clone();
     let path = settings_path(&app).ok_or("No settings folder.")?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(path, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())
+    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -525,7 +528,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     if is_busy(&app) {
         return Err("Stop streaming first, then update.".into());
     }
-    let a = app.state::<AppState>().update.lock().unwrap().clone().ok_or("No update available.")?;
+    let a = app.state::<AppState>().update.lock().unwrap_or_else(PoisonError::into_inner).clone().ok_or("No update available.")?;
     log::info(&format!("installing update {}", a.version));
     update::install(&a).await.map_err(|e| format!("{e:#}"))?;
     app.exit(0);
@@ -581,13 +584,13 @@ fn main() {
                 log::set_path(dir.join("streamroom-live.log"));
             }
             log::info(&format!("---- Streamroom Live {} starting", env!("CARGO_PKG_VERSION")));
-            *app.state::<AppState>().settings.lock().unwrap() = load_settings(&handle);
+            *app.state::<AppState>().settings.lock().unwrap_or_else(PoisonError::into_inner) = load_settings(&handle);
             if let Some(dir) = config_dir(&handle) {
                 let saved = account::load(&dir);
                 if let Some(a) = &saved {
                     log::info(&format!("signed in to {} as {}", a.server, a.user_name));
                 }
-                *app.state::<AppState>().account.lock().unwrap() = saved;
+                *app.state::<AppState>().account.lock().unwrap_or_else(PoisonError::into_inner) = saved;
             }
 
             // streamroom:// links: make sure they point at this copy (the installer registers
@@ -610,7 +613,7 @@ fn main() {
             let stop_item = MenuItem::with_id(app, "stop", "Stop streaming", false, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &stop_item, &quit])?;
-            *app.state::<AppState>().tray_stop.lock().unwrap() = Some(stop_item);
+            *app.state::<AppState>().tray_stop.lock().unwrap_or_else(PoisonError::into_inner) = Some(stop_item);
             let mut tray = TrayIconBuilder::with_id("main").tooltip("Streamroom Live").menu(&menu).show_menu_on_left_click(false);
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
@@ -660,7 +663,7 @@ fn main() {
                     if let Some(reason) = ended {
                         log::info(&format!("session ended: {reason}"));
                         if reason.starts_with("Disconnected") {
-                            let room = match h.state::<AppState>().target.lock().unwrap().as_ref() {
+                            let room = match h.state::<AppState>().target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
                                 Some(Target::Room(id)) => Some(id.clone()),
                                 _ => None,
                             };

@@ -35,7 +35,7 @@ pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<Enc
         if let Err(e) = run(opts, control.clone(), tx, info_tx) {
             // Before startup finished: report to the caller. After: log it.
             if ready.send(Err(anyhow::anyhow!("{e:#}"))).is_err() {
-                control.report_error(format!("video stopped: {e:#}"));
+                control.report_stopped(format!("{e:#}"));
             }
             control.stop.store(true, Ordering::Relaxed);
         }

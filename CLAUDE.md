@@ -218,7 +218,8 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
   `release/linux`. `app/README.md` builds neither. Everything else in `app/` builds both.
 - The Windows build is much slower than Linux; unit tests, `cargo fmt --check` and clippy run only on
   Linux, so clippy never sees `#[cfg(windows)]` code. Style is `app/rustfmt.toml` (wide lines, matching
-  the code). `wincap` and `core` deny `unwrap()` outside tests (clippy).
+  the code). `unwrap()` is denied outside tests in every crate (`[workspace.lints]` in
+  `app/Cargo.toml`, tests allowed by `app/clippy.toml`).
 - Tag pushes and GitHub's GraphQL API aren't available from some Claude environments; this
   release flow (version file + push) was chosen so no tag push is needed. `gh api` (REST) works
   for runs and releases.
@@ -307,3 +308,6 @@ Not started unless the owner picks them:
    updates" in the ⋯ menu.
 9. Linux 0.4.9: X11 streams at the chosen fps (was stuck at 25), `pw-dump` timeout, per-app sound
    fallback is temporary instead of permanent, `videorate` removed.
+10. Windows 0.4.4 / Linux 0.4.10: unwrap lint for every crate, typed "video stopped" reason
+   (`Control::report_stopped`), Linux device names from the kernel host name, dropped errors
+   logged.

@@ -15,3 +15,6 @@ testsrc = ["streamroom-core/testsrc"]
 anyhow.workspace = true
 tokio.workspace = true
 streamroom-core = { path = "../core" }
+
+[lints]
+workspace = true

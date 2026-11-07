@@ -526,10 +526,10 @@ fn stream(run: Running, encoder: Encoder, control: &Control, tx: &SyncSender<Enc
     while !control.stop.load(Ordering::Relaxed) {
         if let Some(msg) = bus.as_ref().and_then(|b| b.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])) {
             let why = match PipelineError::from_message(&msg) {
-                Some(e) => format!("video stopped: {}", e.message),
-                None => "video stopped: the screen share ended".into(),
+                Some(e) => e.message,
+                None => "the screen share ended".into(),
             };
-            control.report_error(why);
+            control.report_stopped(why);
             return;
         }
         apply_requests(control, &sink, &enc, encoder);

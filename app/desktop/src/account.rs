@@ -58,9 +58,16 @@ fn make_private(_p: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// A short name for this PC, shown on the admin page ("Windows app · GAMING-PC").
+/// A short name for this PC, shown on the admin page ("Windows app · GAMING-PC"). Linux shells
+/// rarely export HOSTNAME, so the kernel's host name is the fallback there.
 pub fn device_name() -> String {
-    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "PC".into())
+    ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .chain(std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .map(|s| s.trim().to_string())
+        .find(|s| !s.is_empty())
+        .unwrap_or_else(|| "PC".into())
 }
 
 #[cfg(windows)]
@@ -121,5 +128,11 @@ mod tests {
         forget(&dir);
         assert!(load(&dir).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_pcs_get_their_host_name() {
+        assert_ne!(device_name(), "PC");
     }
 }

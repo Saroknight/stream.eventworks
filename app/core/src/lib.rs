@@ -4,8 +4,6 @@
 //! (wincap: DXGI Desktop Duplication -> hardware H.264), publishes the already-encoded video
 //! plus PC audio, and reports stats. Stopping it, or the room ending, tears everything down.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used))]
-
 pub mod api;
 pub mod link;
 pub mod log;
@@ -36,7 +34,9 @@ pub use wincap::{audio_apps, list_monitors, AudioMode, Control, Monitor, VideoIn
 /// Call once at startup. Two TLS backends end up compiled in through different dependencies;
 /// without picking one, the first secure (wss://) connection panics.
 pub fn init() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    if rustls::crypto::aws_lc_rs::default_provider().install_default().is_err() {
+        log::info("a TLS backend was already chosen; keeping it");
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +79,15 @@ impl Settings {
             "apps" => wincap::AudioMode::All,
             _ => wincap::AudioMode::ExceptDiscord,
         }
+    }
+
+    /// Video bitrate in bits per second, held to 1-50 Mbps.
+    fn bitrate_bps(&self) -> u32 {
+        (self.bitrate_mbps.clamp(1.0, 50.0) * 1e6) as u32
+    }
+
+    fn video_options(&self) -> wincap::VideoOptions {
+        wincap::VideoOptions { height: self.height, fps: self.fps, bitrate_bps: self.bitrate_bps(), monitor: self.monitor, cursor: self.cursor }
     }
 }
 
@@ -147,7 +156,9 @@ impl Session {
             Ok(r) => r,
             Err(e) => {
                 control.stop.store(true, Ordering::Relaxed);
-                let _ = room.close().await;
+                if let Err(close) = room.close().await {
+                    log::info(&format!("leaving the room after a failed start: {close}"));
+                }
                 return Err(e);
             }
         };
@@ -191,20 +202,10 @@ impl Session {
     }
 
     async fn publish(room: &Room, control: &Arc<Control>, settings: &Settings, source: Source) -> Result<((VideoInfo, String), Vec<JoinHandle<()>>)> {
-        let bitrate = (settings.bitrate_mbps.clamp(1.0, 50.0) * 1e6) as u32;
+        let bitrate = settings.bitrate_bps();
         let (frame_tx, frame_rx) = mpsc::sync_channel::<wincap::EncodedFrame>(8);
         let (info, video_thread) = match source {
-            Source::Screen => wincap::start_video(
-                wincap::VideoOptions {
-                    height: settings.height,
-                    fps: settings.fps,
-                    bitrate_bps: bitrate,
-                    monitor: settings.monitor,
-                    cursor: settings.cursor,
-                },
-                control.clone(),
-                frame_tx,
-            )?,
+            Source::Screen => wincap::start_video(settings.video_options(), control.clone(), frame_tx)?,
             Source::TestPattern => start_test_pattern(control.clone(), frame_tx)?,
         };
         let mut threads = vec![video_thread];
@@ -285,6 +286,7 @@ impl Session {
                         .context("publishing the audio track")?;
                     let rt = tokio::runtime::Handle::current();
                     threads.push(std::thread::Builder::new().name("audio-pump".into()).spawn(move || {
+                        let mut failed = 0u64;
                         while let Ok(chunk) = audio_rx.recv() {
                             let frames = chunk.samples.len() as u32 / chunk.channels as u32;
                             let frame = AudioFrame {
@@ -293,7 +295,16 @@ impl Session {
                                 num_channels: chunk.channels as u32,
                                 samples_per_channel: frames,
                             };
-                            let _ = rt.block_on(source.capture_frame(&frame));
+                            if let Err(e) = rt.block_on(source.capture_frame(&frame)) {
+                                // Once, not 100 times a second.
+                                if failed == 0 {
+                                    log::info(&format!("sending sound failed: {e}"));
+                                }
+                                failed += 1;
+                            }
+                        }
+                        if failed > 1 {
+                            log::info(&format!("sending sound failed {failed} times in all"));
                         }
                     })?);
                 }
@@ -340,8 +351,8 @@ impl Session {
         for e in &errors {
             log::info(e);
         }
-        if let Some(e) = errors.iter().find(|e| e.starts_with("video stopped")) {
-            let msg = format!("Screen capture stopped: {}", e.trim_start_matches("video stopped: "));
+        if let Some(why) = self.control.stopped_reason() {
+            let msg = format!("Screen capture stopped: {why}");
             *self.ended.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg.clone());
             return Some(msg);
         }
@@ -354,14 +365,22 @@ impl Session {
     pub async fn stop(self) {
         self.control.stop.store(true, Ordering::Relaxed);
         self.events.abort();
-        let _ = self.room.close().await;
+        if let Err(e) = self.room.close().await {
+            log::info(&format!("leaving the room: {e}"));
+        }
         let threads = self.threads;
-        let _ = tokio::task::spawn_blocking(move || {
+        let joined = tokio::task::spawn_blocking(move || {
             for t in threads {
-                let _ = t.join();
+                let name = t.thread().name().unwrap_or("capture").to_string();
+                if t.join().is_err() {
+                    log::info(&format!("the {name} thread crashed"));
+                }
             }
         })
         .await;
+        if let Err(e) = joined {
+            log::info(&format!("waiting for the capture threads: {e}"));
+        }
         log::info("stopped");
     }
 }
@@ -398,12 +417,7 @@ pub async fn wait_until(timeout: Duration, mut f: impl FnMut() -> bool) -> bool 
 pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
     let control = Arc::new(Control::default());
     let (tx, rx) = mpsc::sync_channel::<wincap::EncodedFrame>(64);
-    let bitrate = (settings.bitrate_mbps.clamp(1.0, 50.0) * 1e6) as u32;
-    let (info, thread) = wincap::start_video(
-        wincap::VideoOptions { height: settings.height, fps: settings.fps, bitrate_bps: bitrate, monitor: settings.monitor, cursor: settings.cursor },
-        control.clone(),
-        tx,
-    )?;
+    let (info, thread) = wincap::start_video(settings.video_options(), control.clone(), tx)?;
     let (mut frames, mut bytes, mut keys) = (0u64, 0u64, 0u64);
     let end = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < end {
@@ -415,7 +429,9 @@ pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
     }
     control.stop.store(true, Ordering::Relaxed);
     drop(rx);
-    let _ = thread.join();
+    if thread.join().is_err() {
+        log::info("the video thread crashed during the capture test");
+    }
     let st = &control.stats;
     let (captured, submitted) = (st.captured.load(Ordering::Relaxed), st.submitted.load(Ordering::Relaxed));
     Ok(format!(

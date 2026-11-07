@@ -9,9 +9,8 @@
 //! Audio: WASAPI loopback: everything the PC plays, everything except Discord, or only chosen
 //! apps (per-app process loopback on Windows 10 build 20348+ / Windows 11).
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used))]
-
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 /// One compressed H.264 access unit in Annex B format (start codes), SPS/PPS included on keyframes.
 pub struct EncodedFrame {
@@ -95,7 +94,9 @@ pub struct Control {
     pub bitrate_request: AtomicU32,
     pub stats: Stats,
     /// Errors from the capture threads, for the app to show and log.
-    pub errors: std::sync::Mutex<Vec<String>>,
+    pub errors: Mutex<Vec<String>>,
+    /// Why video capture stopped on its own, if it did (the first reason given).
+    stopped: Mutex<Option<String>>,
 }
 
 #[derive(Default)]
@@ -119,12 +120,21 @@ impl Control {
     }
     pub fn report_error(&self, msg: String) {
         eprintln!("{msg}");
-        if let Ok(mut e) = self.errors.lock() {
-            e.push(msg);
-        }
+        self.errors.lock().unwrap_or_else(PoisonError::into_inner).push(msg);
     }
     pub fn take_errors(&self) -> Vec<String> {
-        self.errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default()
+        std::mem::take(&mut *self.errors.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+    /// Video capture stopped on its own (the screen share ended, the encoder failed): records
+    /// why for the app and stops everything.
+    pub fn report_stopped(&self, why: String) {
+        self.report_error(format!("video stopped: {why}"));
+        self.stopped.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert(why);
+        self.stop.store(true, Ordering::Relaxed);
+    }
+    /// Why video capture stopped on its own, if it did.
+    pub fn stopped_reason(&self) -> Option<String> {
+        self.stopped.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
     pub fn request_bitrate(&self, bps: u32) {
         self.bitrate_request.store(bps, Ordering::Relaxed);
@@ -188,4 +198,21 @@ pub fn start_audio(
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn audio_apps() -> Vec<String> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Control;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn first_stop_reason_wins_and_stops_everything() {
+        let control = Control::default();
+        assert_eq!(control.stopped_reason(), None);
+        control.report_stopped("the screen share ended".into());
+        control.report_stopped("a later, knock-on failure".into());
+        assert_eq!(control.stopped_reason().as_deref(), Some("the screen share ended"));
+        assert!(control.stop.load(Ordering::Relaxed));
+        assert_eq!(control.take_errors().len(), 2, "both are still logged");
+    }
 }

@@ -6,6 +6,10 @@ members = ["core", "wincap", "cli", "desktop"]
 version = "0.4.2"
 edition = "2021"
 
+# Each member opts in with `[lints] workspace = true`. Tests may unwrap (clippy.toml).
+[workspace.lints.clippy]
+unwrap_used = "deny"
+
 [workspace.dependencies]
 anyhow = "1"
 livekit = { version = "0.10", default-features = false, features = ["native", "rustls-tls-webpki-roots"] }
