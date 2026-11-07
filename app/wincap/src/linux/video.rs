@@ -202,6 +202,33 @@ fn try_start(text: &str) -> Result<Running> {
     }
 }
 
+/// What PipeWire shows on the portal's connection (the shared screen should be listed).
+fn visible_nodes(p: &portal::PortalStream) -> String {
+    let Some(provider) = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider") else {
+        return "can't check: no PipeWire device provider".into();
+    };
+    let Ok(fd) = p.fd.try_clone() else { return "can't check: fd".into() };
+    if provider.find_property("fd").is_none() {
+        return "can't check: device provider has no fd".into();
+    }
+    provider.set_property("fd", fd.as_raw_fd());
+    if provider.start().is_err() {
+        return "can't check: couldn't connect".into();
+    }
+    let list: Vec<String> = provider
+        .devices()
+        .iter()
+        .map(|d| {
+            let props = d.properties();
+            let get = |k: &str| props.as_ref().and_then(|s| s.get::<String>(k).ok()).unwrap_or_default();
+            format!("{} [{}; id {}; serial {}]", d.display_name(), d.device_class(), get("object.id"), get("object.serial"))
+        })
+        .collect();
+    provider.stop();
+    drop(fd);
+    if list.is_empty() { "nothing".into() } else { list.join(", ") }
+}
+
 /// Tries each available encoder in order; the first that produces video wins.
 fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(Running, Enc, Vec<String>, String), Vec<String>> {
     let mut tried = Vec::new();
@@ -275,7 +302,10 @@ pub fn start_video(
                 Screen::Portal(p) => {
                     let fd = p.fd.as_raw_fd();
                     let open = std::fs::read_link(format!("/proc/self/fd/{fd}")).map(|l| l.display().to_string()).unwrap_or_else(|e| format!("not open: {e}"));
-                    format!("\n(portal stream: node {}, serial {:?}, size {:?}, fd {fd} = {open})", p.node, p.serial, p.size)
+                    format!(
+                        "\n(portal stream: node {}, serial {:?}, size {:?}, fd {fd} = {open})\n(visible on that connection: {})",
+                        p.node, p.serial, p.size, visible_nodes(p)
+                    )
                 }
                 Screen::X11 { .. } => String::new(),
             };

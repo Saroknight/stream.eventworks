@@ -381,3 +381,35 @@ pub async fn wait_until(timeout: Duration, mut f: impl FnMut() -> bool) -> bool 
     }
     false
 }
+
+/// Captures and encodes the screen for a few seconds without any server, and reports what
+/// happened. For troubleshooting (`streamroom-live-cli --capture-test`).
+pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
+    let control = Arc::new(Control::default());
+    let (tx, rx) = mpsc::sync_channel::<wincap::EncodedFrame>(64);
+    let bitrate = (settings.bitrate_mbps.clamp(1.0, 50.0) * 1e6) as u32;
+    let (info, thread) = wincap::start_video(
+        wincap::VideoOptions { height: settings.height, fps: settings.fps, bitrate_bps: bitrate, monitor: settings.monitor, cursor: settings.cursor },
+        control.clone(),
+        tx,
+    )?;
+    let (mut frames, mut bytes, mut keys) = (0u64, 0u64, 0u64);
+    let end = Instant::now() + Duration::from_secs(seconds);
+    while Instant::now() < end {
+        if let Ok(f) = rx.recv_timeout(Duration::from_millis(200)) {
+            frames += 1;
+            bytes += f.data.len() as u64;
+            keys += f.keyframe as u64;
+        }
+    }
+    control.stop.store(true, Ordering::Relaxed);
+    drop(rx);
+    let _ = thread.join();
+    Ok(format!(
+        "Capture:  {} {}x{} -> {}x{} @ {} fps\nEncoder:  {}\nResult:   {frames} frames ({keys} keyframes, {:.1} Mbps) in {seconds} s{}",
+        info.capture_method, info.source_width, info.source_height, info.width, info.height, info.fps, info.encoder,
+        bytes as f64 * 8.0 / seconds as f64 / 1e6,
+        if frames == 0 { "\nNo frames arrived: the screen stream started but sent nothing." } else { "" }
+    ))
+}
+

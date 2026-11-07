@@ -22,6 +22,7 @@ Options:
   --no-audio         Don't share PC audio
   --no-cursor        Don't show the mouse cursor
   --list-monitors    Show monitors and exit
+  --capture-test     Capture and encode the screen for 5 seconds, no server needed (troubleshooting)
   --test-pattern     Send a moving test pattern instead of the screen (testing only)
 ";
 
@@ -75,6 +76,13 @@ async fn run() -> Result<()> {
             "--test-pattern" => source = Source::TestPattern,
             "--name" => {
                 value("--name")?; // accepted for compatibility; the server uses your account name
+            }
+            "--capture-test" => {
+                println!("Streamroom Live {} capture test: pick a screen if your desktop asks.", env!("CARGO_PKG_VERSION"));
+                let s = settings.clone();
+                let report = tokio::task::spawn_blocking(move || streamroom_core::capture_test(&s, 5)).await??;
+                println!("{report}\n\nCapture works.");
+                return Ok(());
             }
             "--list-monitors" => {
                 for m in streamroom_core::list_monitors() {
