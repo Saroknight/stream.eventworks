@@ -42,9 +42,8 @@ pub fn forget() {
 }
 
 fn token_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
+    let base =
+        std::env::var_os("XDG_STATE_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
     Some(base.join("streamroom-live").join("screencast-token"))
 }
 
@@ -125,9 +124,7 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
         });
     })?;
     // The user may take a while in the dialog.
-    let (fd, node, serial, size) = rx
-        .recv_timeout(Duration::from_secs(180))
-        .map_err(|_| anyhow!("no screen was chosen in time"))?
-        .context("screen sharing")?;
+    let (fd, node, serial, size) =
+        rx.recv_timeout(Duration::from_secs(180)).map_err(|_| anyhow!("no screen was chosen in time"))?.context("screen sharing")?;
     Ok(PortalStream { fd, node, serial, size, restored, stop, _thread: thread })
 }

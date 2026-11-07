@@ -134,9 +134,9 @@ mod audio;
 #[cfg(windows)]
 mod capture;
 #[cfg(windows)]
-mod cursor;
-#[cfg(windows)]
 mod convert;
+#[cfg(windows)]
+mod cursor;
 #[cfg(windows)]
 mod d3d;
 #[cfg(windows)]

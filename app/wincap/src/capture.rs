@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
-    DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_POINTER_SHAPE_INFO,
+    IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO,
 };
 
 use crate::cursor::{CursorState, Shape};
@@ -34,7 +34,8 @@ pub enum Grab {
 
 impl Duplicator {
     pub fn new(output: &IDXGIOutput1, device: &ID3D11Device) -> Result<Self> {
-        let mut d = Self { output: output.clone(), device: device.clone(), dup: None, holding: false, cursor: CursorState::default(), width: 0, height: 0 };
+        let mut d =
+            Self { output: output.clone(), device: device.clone(), dup: None, holding: false, cursor: CursorState::default(), width: 0, height: 0 };
         d.recreate().context("start desktop duplication")?;
         Ok(d)
     }
@@ -117,9 +118,7 @@ impl Duplicator {
             let mut buf = vec![0u8; info.PointerShapeBufferSize as usize];
             let mut needed = 0u32;
             let mut shape_info = DXGI_OUTDUPL_POINTER_SHAPE_INFO::default();
-            let ok = unsafe {
-                dup.GetFramePointerShape(buf.len() as u32, buf.as_mut_ptr() as *mut _, &mut needed, &mut shape_info)
-            };
+            let ok = unsafe { dup.GetFramePointerShape(buf.len() as u32, buf.as_mut_ptr() as *mut _, &mut needed, &mut shape_info) };
             if ok.is_ok() {
                 if let Some(shape) = Shape::from_dxgi(&shape_info, &buf[..needed.min(buf.len() as u32) as usize]) {
                     self.cursor.shape = Some(shape);

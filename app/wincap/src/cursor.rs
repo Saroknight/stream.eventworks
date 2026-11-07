@@ -72,7 +72,11 @@ impl Shape {
                     (bgr, Op::Blend(p[3]))
                 } else if kind == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR.0 {
                     // Alpha byte is a mask: 0 = use the color, 0xFF = XOR with the screen.
-                    if p[3] == 0 { (bgr, Op::Blend(255)) } else { (bgr, Op::Xor) }
+                    if p[3] == 0 {
+                        (bgr, Op::Blend(255))
+                    } else {
+                        (bgr, Op::Xor)
+                    }
                 } else {
                     return None;
                 });

@@ -57,9 +57,8 @@ fn client() -> Result<reqwest::Client> {
 
 /// "0.10.2" > "0.9.9", ignoring a leading tag prefix ("app-v", "linux-v", "v").
 fn newer(candidate: &str, current: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.trim_start_matches(|c: char| !c.is_ascii_digit()).split(['.', '-']).map_while(|p| p.parse().ok()).collect()
-    };
+    let parse =
+        |v: &str| -> Vec<u64> { v.trim_start_matches(|c: char| !c.is_ascii_digit()).split(['.', '-']).map_while(|p| p.parse().ok()).collect() };
     parse(candidate) > parse(current)
 }
 
@@ -110,11 +109,8 @@ pub async fn install(a: &Available) -> Result<()> {
 /// version; the caller exits right after.
 #[cfg(target_os = "linux")]
 fn run_after_exit(setup: &std::path::Path) -> Result<()> {
-    let status = std::process::Command::new("pkexec")
-        .args(["pacman", "-U", "--noconfirm"])
-        .arg(setup)
-        .status()
-        .context("starting pkexec (polkit)")?;
+    let status =
+        std::process::Command::new("pkexec").args(["pacman", "-U", "--noconfirm"]).arg(setup).status().context("starting pkexec (polkit)")?;
     if !status.success() {
         bail!("the update wasn't installed (password cancelled, or pacman refused it)");
     }

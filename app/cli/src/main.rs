@@ -118,7 +118,10 @@ async fn run() -> Result<()> {
     };
     println!("live in \"{}\"", info.room_title);
     println!("GPU:      {}", info.video.adapter);
-    println!("Capture:  {} {}x{} -> {}x{} @ {} fps", info.video.capture_method, info.video.source_width, info.video.source_height, info.video.width, info.video.height, info.video.fps);
+    println!(
+        "Capture:  {} {}x{} -> {}x{} @ {} fps",
+        info.video.capture_method, info.video.source_width, info.video.source_height, info.video.width, info.video.height, info.video.fps
+    );
     println!("Encoder:  {} (H.264, {:.1} Mbps)", info.video.encoder, info.bitrate_mbps);
     if !info.video.unsupported_settings.is_empty() {
         println!("          (encoder ignored: {})", info.video.unsupported_settings.join(", "));

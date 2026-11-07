@@ -222,10 +222,8 @@ fn cap_frame_rate(enc: &gst::Element, fps: u32) -> Result<()> {
 
 /// Starts a pipeline and waits for its first encoded frame (or an error).
 fn try_start(text: &str, fps: u32) -> Result<Running> {
-    let pipeline = gst::parse::launch(text)
-        .context("building the video pipeline")?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| anyhow!("not a pipeline"))?;
+    let pipeline =
+        gst::parse::launch(text).context("building the video pipeline")?.downcast::<gst::Pipeline>().map_err(|_| anyhow!("not a pipeline"))?;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or_else(|| anyhow!("no sink"))?;
     let enc = pipeline.by_name("enc").ok_or_else(|| anyhow!("no encoder"))?;
     cap_frame_rate(&enc, fps).context("capping the frame rate")?;
@@ -308,11 +306,7 @@ fn visible_nodes(p: &portal::PortalStream) -> String {
     match portal_nodes(p) {
         Err(e) => format!("can't check: {e}"),
         Ok(list) if list.is_empty() => "nothing".into(),
-        Ok(list) => list
-            .iter()
-            .map(|n| format!("{} [{}; id {}; serial {}]", n.name, n.class, n.id, n.serial))
-            .collect::<Vec<_>>()
-            .join(", "),
+        Ok(list) => list.iter().map(|n| format!("{} [{}; id {}; serial {}]", n.name, n.class, n.id, n.serial)).collect::<Vec<_>>().join(", "),
     }
 }
 
@@ -348,11 +342,7 @@ fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(
     Err(tried)
 }
 
-pub fn start_video(
-    opts: VideoOptions,
-    control: Arc<Control>,
-    tx: SyncSender<EncodedFrame>,
-) -> Result<(VideoInfo, std::thread::JoinHandle<()>)> {
+pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<EncodedFrame>) -> Result<(VideoInfo, std::thread::JoinHandle<()>)> {
     gst::init().context("GStreamer")?;
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     let use_portal = wayland || std::env::var_os("DISPLAY").is_none();
@@ -392,10 +382,15 @@ pub fn start_video(
             let detail = match &screen {
                 Screen::Portal(p) => {
                     let fd = p.fd.as_raw_fd();
-                    let open = std::fs::read_link(format!("/proc/self/fd/{fd}")).map(|l| l.display().to_string()).unwrap_or_else(|e| format!("not open: {e}"));
+                    let open = std::fs::read_link(format!("/proc/self/fd/{fd}"))
+                        .map(|l| l.display().to_string())
+                        .unwrap_or_else(|e| format!("not open: {e}"));
                     format!(
                         "\n(portal stream: node {}, serial {:?}, size {:?}, fd {fd} = {open})\n(visible on that connection: {})",
-                        p.node, p.serial, p.size, visible_nodes(p)
+                        p.node,
+                        p.serial,
+                        p.size,
+                        visible_nodes(p)
                     )
                 }
                 Screen::X11 { .. } => String::new(),

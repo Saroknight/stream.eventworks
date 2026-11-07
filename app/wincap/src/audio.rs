@@ -23,9 +23,7 @@ use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::Multimedia::WAVE_FORMAT_IEEE_FLOAT;
 use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, BLOB, CLSCTX_ALL, COINIT_MULTITHREADED};
-use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
+use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows::Win32::System::Threading::CreateEventW;
 use windows::Win32::System::Variant::VT_BLOB;
 
@@ -43,7 +41,10 @@ const DISCORD: &[&str] = &["discord.exe", "discordptb.exe", "discordcanary.exe"]
 enum Source {
     System,
     /// Process loopback of one process tree.
-    Process { pid: u32, exclude: bool },
+    Process {
+        pid: u32,
+        exclude: bool,
+    },
     /// Nothing to capture right now (e.g. none of the chosen apps is running).
     Silence,
 }
@@ -137,9 +138,7 @@ fn roots(names: &[String]) -> Vec<(String, u32)> {
     let procs = processes();
     let mut out: Vec<(String, u32)> = procs
         .iter()
-        .filter(|(_, (name, parent))| {
-            want.contains(name) && !procs.get(parent).map(|(pn, _)| want.contains(pn)).unwrap_or(false)
-        })
+        .filter(|(_, (name, parent))| want.contains(name) && !procs.get(parent).map(|(pn, _)| want.contains(pn)).unwrap_or(false))
         .map(|(pid, (name, _))| (name.clone(), *pid))
         .collect();
     out.sort();
@@ -211,8 +210,7 @@ fn open(source: &Source) -> Result<Option<Capture>> {
         let (client, event) = match source {
             Source::Silence => return Ok(None),
             Source::System => {
-                let enumerator: IMMDeviceEnumerator =
-                    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("MMDeviceEnumerator")?;
+                let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("MMDeviceEnumerator")?;
                 let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).context("default output device")?;
                 let client: IAudioClient = device.Activate(CLSCTX_ALL, None).context("IAudioClient")?;
                 client
@@ -339,10 +337,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Done_Impl {
 
 fn activate_process_loopback(pid: u32, exclude: bool) -> Result<IAudioClient> {
     unsafe {
-        let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
-            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-            ..Default::default()
-        };
+        let mut params = AUDIOCLIENT_ACTIVATION_PARAMS { ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, ..Default::default() };
         params.Anonymous.ProcessLoopbackParams = AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
             TargetProcessId: pid,
             ProcessLoopbackMode: if exclude {

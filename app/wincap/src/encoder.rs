@@ -81,8 +81,7 @@ fn find_encoders(luid: LUID) -> Result<Vec<IMFActivate>> {
         }
         let mut ptr: *mut Option<IMFActivate> = std::ptr::null_mut();
         let mut count = 0u32;
-        MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, flags, Some(&input), Some(&output), &mut ptr, &mut count)
-            .context("MFTEnumEx")?;
+        MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, flags, Some(&input), Some(&output), &mut ptr, &mut count).context("MFTEnumEx")?;
         Ok(take(ptr, count))
     }
 }
@@ -109,15 +108,7 @@ impl Encoder {
         bail!("no hardware encoder could be started: {}", errors.join("; "))
     }
 
-    fn open(
-        activate: &IMFActivate,
-        name: &str,
-        device: &ID3D11Device,
-        width: u32,
-        height: u32,
-        fps: u32,
-        bitrate: u32,
-    ) -> Result<Self> {
+    fn open(activate: &IMFActivate, name: &str, device: &ID3D11Device, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Self> {
         unsafe {
             let mft: IMFTransform = activate.ActivateObject().context("ActivateObject")?;
 
@@ -134,8 +125,7 @@ impl Encoder {
             MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
             let manager = manager.ok_or_else(|| anyhow!("no DXGI device manager"))?;
             manager.ResetDevice(device, token)?;
-            mft.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize)
-                .context("encoder rejected the D3D11 device")?;
+            mft.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize).context("encoder rejected the D3D11 device")?;
 
             // Low-latency settings. Rate control must be set before the output type.
             let codec = mft.cast::<ICodecAPI>().ok();
@@ -199,17 +189,8 @@ impl Encoder {
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
-            let mut enc = Self {
-                mft,
-                events,
-                codec,
-                _manager: manager,
-                name: name.to_string(),
-                unsupported,
-                fps,
-                need_input: 0,
-                sequence_header: Vec::new(),
-            };
+            let mut enc =
+                Self { mft, events, codec, _manager: manager, name: name.to_string(), unsupported, fps, need_input: 0, sequence_header: Vec::new() };
             enc.refresh_sequence_header();
             Ok(enc)
         }
@@ -246,12 +227,7 @@ impl Encoder {
     }
 
     fn take_output(&mut self, out: &mut Vec<EncodedOut>) -> Result<()> {
-        let mut buffers = [MFT_OUTPUT_DATA_BUFFER {
-            dwStreamID: 0,
-            pSample: ManuallyDrop::new(None),
-            dwStatus: 0,
-            pEvents: ManuallyDrop::new(None),
-        }];
+        let mut buffers = [MFT_OUTPUT_DATA_BUFFER { dwStreamID: 0, pSample: ManuallyDrop::new(None), dwStatus: 0, pEvents: ManuallyDrop::new(None) }];
         let mut status = 0u32;
         let result = unsafe { self.mft.ProcessOutput(0, &mut buffers, &mut status) };
         let sample = unsafe { ManuallyDrop::take(&mut buffers[0].pSample) };

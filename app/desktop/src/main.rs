@@ -210,10 +210,13 @@ async fn end(app: &AppHandle, reason: Option<String>) {
     if let Some(s) = slot.take() {
         s.stop().await;
     }
-    set_status(app, match reason {
-        Some(message) => Status::Ended { message },
-        None => Status::Idle,
-    });
+    set_status(
+        app,
+        match reason {
+            Some(message) => Status::Ended { message },
+            None => Status::Idle,
+        },
+    );
 }
 
 /// A link from the site (or pasted): sign in with its code if it has one, then go live in its
@@ -445,10 +448,7 @@ fn open_url(url: &str) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("rundll32")
-            .args(["url.dll,FileProtocolHandler", url])
-            .creation_flags(0x0800_0000)
-            .spawn();
+        let _ = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).creation_flags(0x0800_0000).spawn();
     }
     #[cfg(not(windows))]
     {
@@ -551,8 +551,23 @@ fn main() {
             tray_stop: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
-            get_state, start_link, stop, restart, dismiss, save_settings, open_logs, check_update, install_update,
-            list_rooms, go_live, create_room, end_room, open_room, open_site, sign_out, audio_apps
+            get_state,
+            start_link,
+            stop,
+            restart,
+            dismiss,
+            save_settings,
+            open_logs,
+            check_update,
+            install_update,
+            list_rooms,
+            go_live,
+            create_room,
+            end_room,
+            open_room,
+            open_site,
+            sign_out,
+            audio_apps
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -139,9 +139,8 @@ impl Api {
     /// it's the same person (no duplicate devices).
     pub async fn pair(&self, code: &str, current: Option<&Account>, device_name: &str) -> Result<Account> {
         let existing = current.filter(|a| a.server == self.server).map(|a| a.device_key.clone());
-        let v = self
-            .call(reqwest::Method::POST, "/app/pair", Some(json!({ "code": code, "deviceKey": existing, "deviceName": device_name })))
-            .await?;
+        let v =
+            self.call(reqwest::Method::POST, "/app/pair", Some(json!({ "code": code, "deviceKey": existing, "deviceName": device_name }))).await?;
         let r: PairReply = serde_json::from_value(v).context("unexpected reply from the server")?;
         Ok(Account { server: self.server.clone(), user_id: r.user.id, user_name: r.user.name, is_admin: r.user.is_admin, device_key: r.device_key })
     }
@@ -193,10 +192,7 @@ mod tests {
     #[test]
     fn parses_launch_links() {
         let l = parse_launch("streamroom://open?server=https%3A%2F%2Fstream.eventworks.click&room=AbC-12&pair=x.y").unwrap();
-        assert_eq!(
-            l,
-            Launch::Open { server: "https://stream.eventworks.click".into(), room: Some("AbC-12".into()), pair: Some("x.y".into()) }
-        );
+        assert_eq!(l, Launch::Open { server: "https://stream.eventworks.click".into(), room: Some("AbC-12".into()), pair: Some("x.y".into()) });
         let l = parse_launch("streamroom://open/?server=http://localhost:3000/").unwrap();
         assert_eq!(l, Launch::Open { server: "http://localhost:3000".into(), room: None, pair: None });
         // Room ids are plain: anything else is dropped rather than put into a URL path.
@@ -205,9 +201,6 @@ mod tests {
         assert!(parse_launch("streamroom://open?server=javascript:alert(1)").is_err());
         // Old links still work.
         assert!(matches!(parse_launch("https://stream.eventworks.click/live/AbC#k=t").unwrap(), Launch::Legacy(_)));
-        assert!(matches!(
-            parse_launch("streamroom://open?link=http%3A%2F%2Flocalhost%3A3000%2Flive%2FR%23k%3Dk").unwrap(),
-            Launch::Legacy(_)
-        ));
+        assert!(matches!(parse_launch("streamroom://open?link=http%3A%2F%2Flocalhost%3A3000%2Flive%2FR%23k%3Dk").unwrap(), Launch::Legacy(_)));
     }
 }

@@ -12,7 +12,14 @@ use openh264::encoder::{BitRate, Encoder, EncoderConfig, FrameRate};
 use openh264::formats::{RgbSliceU8, YUVBuffer};
 use wincap::{Control, EncodedFrame, VideoInfo};
 
-pub fn start(width: u32, height: u32, fps: u32, bitrate: u32, control: Arc<Control>, tx: SyncSender<EncodedFrame>) -> Result<(VideoInfo, JoinHandle<()>)> {
+pub fn start(
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate: u32,
+    control: Arc<Control>,
+    tx: SyncSender<EncodedFrame>,
+) -> Result<(VideoInfo, JoinHandle<()>)> {
     let config = EncoderConfig::new().bitrate(BitRate::from_bps(bitrate)).max_frame_rate(FrameRate::from_hz(fps as f32)).skip_frames(false);
     let mut encoder = Encoder::with_api_config(openh264::OpenH264API::from_source(), config)?;
     let info = VideoInfo {
