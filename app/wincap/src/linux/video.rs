@@ -149,7 +149,7 @@ impl Screen {
             Screen::X11 { .. } => vec![String::new()],
         }
     }
-    fn source(&self, target: &str) -> String {
+    fn source(&self, target: &str, fps: u32) -> String {
         match self {
             // System-memory frames: the safest path across desktops and drivers.
             Screen::Portal(p) => format!(
@@ -163,7 +163,8 @@ impl Screen {
                  do-timestamp=true keepalive-time=1000 resend-last=true ! {SQUARE}",
                 p.fd.as_raw_fd(),
             ),
-            Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! {SQUARE}"),
+            // ximagesrc runs at a fixed rate, 25 fps unless told otherwise.
+            Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! video/x-raw,framerate={fps}/1 ! {SQUARE}"),
         }
     }
     /// The screen's shape as the portal reported it (X11: unknown until it runs).
@@ -197,14 +198,14 @@ fn pipeline_text(screen: &Screen, target: &str, enc: Encoder, opts: &VideoOption
     };
     format!(
         // The frame rate is capped by `FrameGate` at the encoder's input, not here: PipeWire
-        // screens have a variable rate (0/1), so max-rate alone lets everything through, and a
-        // fixed framerate in the caps makes GNOME's screen stream fail to negotiate.
-        "{src} ! queue max-size-buffers=2 leaky=downstream ! videorate drop-only=true max-rate={fps} ! \
+        // screens have a variable rate (0/1), so videorate's max-rate lets everything through,
+        // and a fixed framerate in the caps makes GNOME's screen stream fail to negotiate.
+        "{src} ! queue max-size-buffers=2 leaky=downstream ! \
          {convert} ! \
          {element} name=enc {settings} ! h264parse config-interval=-1 ! \
          video/x-h264,stream-format=byte-stream,alignment=au ! \
          appsink name=sink sync=false max-buffers=4 drop=true",
-        src = screen.source(target),
+        src = screen.source(target, fps),
         convert = enc.convert(&size),
         element = enc.element(),
         settings = enc.settings(kbps, fps * 2),

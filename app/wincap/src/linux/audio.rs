@@ -10,13 +10,14 @@
 //! 16-bit PCM, continuous (silence when nothing plays).
 
 use std::collections::BTreeSet;
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 
@@ -26,6 +27,14 @@ use crate::{AudioChunk, AudioMode, Control};
 const RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
 const CHUNK: usize = (RATE / 100) as usize * CHANNELS as usize;
+/// `pw-dump` answers in a few milliseconds; longer means PipeWire is stuck.
+const PW_DUMP_TIMEOUT: Duration = Duration::from_secs(2);
+/// Per-app capture failing this many times in a row: share all PC audio for a while.
+const FAILS_BEFORE_FALLBACK: u32 = 3;
+/// How long all PC audio is shared before per-app capture is tried again.
+const FALLBACK_TIME: Duration = Duration::from_secs(30);
+/// A pipeline that ran this long was healthy: earlier failures no longer count.
+const HEALTHY_RUN: Duration = Duration::from_secs(10);
 
 /// An app's sound stream, as PipeWire lists it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,11 +48,46 @@ fn is_discord(app: &str) -> bool {
     app.contains("discord") || app.contains("vesktop") || app.contains("webcord")
 }
 
+/// PipeWire's object list as JSON, from `pw-dump`. Killed if it doesn't answer in time, so a
+/// stuck PipeWire can't hang the sound thread (and with it, stopping the stream).
+fn pw_dump() -> Result<Vec<u8>> {
+    let mut child = Command::new("pw-dump").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().context("starting pw-dump")?;
+    let mut stdout = child.stdout.take().context("pw-dump has no output")?;
+    // Read while it runs: its output is bigger than the pipe holds.
+    let reader = std::thread::Builder::new()
+        .name("pw-dump".into())
+        .spawn(move || {
+            let mut out = Vec::new();
+            stdout.read_to_end(&mut out).map(|_| out)
+        })
+        .context("reading pw-dump")?;
+    let deadline = Instant::now() + PW_DUMP_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().context("waiting for pw-dump")? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            // Killing it closes the pipe, so the reader finishes on its own.
+            child.kill().context("stopping pw-dump")?;
+            child.wait().context("waiting for pw-dump to stop")?;
+            bail!("pw-dump didn't answer within {} s (is PipeWire running?)", PW_DUMP_TIMEOUT.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let out = reader.join().map_err(|_| anyhow!("reading pw-dump's output failed"))?.context("reading pw-dump's output")?;
+    ensure!(status.success(), "pw-dump failed ({status})");
+    Ok(out)
+}
+
 /// App output streams playing (or open) right now.
-fn app_streams() -> Vec<AppStream> {
-    let Ok(out) = Command::new("pw-dump").output() else { return Vec::new() };
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else { return Vec::new() };
-    let me = std::process::id().to_string();
+fn app_streams() -> Result<Vec<AppStream>> {
+    let json = pw_dump()?;
+    parse_app_streams(&json, &std::process::id().to_string())
+}
+
+/// The app output streams in `pw-dump` output, except this process's own (`me`: our pid).
+fn parse_app_streams(json: &[u8], me: &str) -> Result<Vec<AppStream>> {
+    let v: serde_json::Value = serde_json::from_slice(json).context("reading pw-dump's output")?;
     let mut list: Vec<AppStream> = v
         .as_array()
         .into_iter()
@@ -66,12 +110,13 @@ fn app_streams() -> Vec<AppStream> {
         })
         .collect();
     list.sort();
-    list
+    Ok(list)
 }
 
-/// Program names of apps with sound streams now, for "Only certain apps".
+/// Program names of apps with sound streams now, for "Only certain apps". Empty if PipeWire
+/// can't be asked (the list is only a suggestion in Settings).
 pub fn audio_apps() -> Vec<String> {
-    app_streams().into_iter().map(|s| s.app).collect::<BTreeSet<_>>().into_iter().collect()
+    app_streams().unwrap_or_default().into_iter().map(|s| s.app).collect::<BTreeSet<_>>().into_iter().collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,19 +127,24 @@ enum Plan {
     Streams(Vec<u64>),
 }
 
-fn plan(mode: &AudioMode) -> (Plan, String) {
+/// Which streams to capture for `mode` right now.
+fn plan(mode: &AudioMode) -> Result<Plan> {
+    let keep = |wanted: &dyn Fn(&str) -> bool| -> Result<Plan> {
+        Ok(Plan::Streams(app_streams()?.into_iter().filter(|a| wanted(&a.app)).map(|a| a.serial).collect()))
+    };
     match mode {
-        AudioMode::All => (Plan::All, "all PC audio".into()),
-        AudioMode::ExceptDiscord => {
-            let s = app_streams();
-            let keep: Vec<u64> = s.iter().filter(|a| !is_discord(&a.app)).map(|a| a.serial).collect();
-            (Plan::Streams(keep), "everything except Discord".into())
-        }
-        AudioMode::Apps(names) => {
-            let want: Vec<String> = names.iter().map(|n| n.to_ascii_lowercase()).collect();
-            let keep: Vec<u64> = app_streams().iter().filter(|a| want.contains(&a.app)).map(|a| a.serial).collect();
-            (Plan::Streams(keep), format!("only {}", names.join(", ")))
-        }
+        AudioMode::All => Ok(Plan::All),
+        AudioMode::ExceptDiscord => keep(&|app| !is_discord(app)),
+        AudioMode::Apps(names) => keep(&|app| names.iter().any(|n| n.eq_ignore_ascii_case(app))),
+    }
+}
+
+/// What `mode` shares, in words for the app.
+fn describe(mode: &AudioMode) -> String {
+    match mode {
+        AudioMode::All => "all PC audio".into(),
+        AudioMode::ExceptDiscord => "everything except Discord".into(),
+        AudioMode::Apps(names) => format!("only {}", names.join(", ")),
     }
 }
 
@@ -107,7 +157,7 @@ fn pipeline_text(plan: &Plan) -> String {
             // A silent source keeps the mix running when no app is playing.
             let mut s = format!(
                 "audiomixer name=mix latency=20000000 ! {tail} \
-                 audiotestsrc is-live=true wave=silence ! audioconvert ! audioresample ! {caps} ! mix."
+                 audiotestsrc is-live=true wave=silence ! {caps} ! mix."
             );
             // media.type=Audio: WirePlumber only links nodes of the same media type, and recent
             // pipewiresrc connects as "Unknown" unless told (then: "target not found").
@@ -125,41 +175,49 @@ fn pipeline_text(plan: &Plan) -> String {
 
 pub fn start_audio(control: Arc<Control>, tx: SyncSender<AudioChunk>, mode: AudioMode) -> Result<(std::thread::JoinHandle<()>, String)> {
     gst::init().context("GStreamer")?;
-    let (_, desc) = plan(&mode);
-    let handle = std::thread::Builder::new().name("audio".into()).spawn(move || {
-        let mut fails = 0;
-        while !control.stop.load(Ordering::Relaxed) {
-            let (p, _) = plan(&mode);
-            match run(&control, &tx, &mode, &p) {
-                Ok(()) => fails = 0,
-                Err(e) => {
-                    fails += 1;
-                    control.report_error(format!("audio capture restarting: {e:#}"));
-                    // Per-app capture keeps failing: fall back to everything rather than silence.
-                    if fails >= 3 && p != Plan::All {
-                        match run(&control, &tx, &AudioMode::All, &Plan::All) {
-                            Ok(()) => fails = 0,
-                            Err(e) => control.report_error(format!("all-audio fallback failed: {e:#}")),
-                        }
-                    }
-                    std::thread::sleep(Duration::from_millis(500));
-                }
-            }
-        }
-    })?;
+    let desc = describe(&mode);
+    let handle = std::thread::Builder::new().name("audio".into()).spawn(move || capture(&control, &tx, &mode))?;
     Ok((handle, desc))
 }
 
-/// Runs one pipeline until the plan changes (apps start/stop) or we're stopped.
-/// The pipeline is shut down however this exits.
-fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan) -> Result<()> {
+/// Captures sound until stopped, restarting the pipeline whenever the plan changes or it fails.
+fn capture(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode) {
+    let mut fails = 0;
+    while !control.stop.load(Ordering::Relaxed) {
+        let started = Instant::now();
+        let result = plan(mode).and_then(|p| run(control, tx, mode, &p, None));
+        if started.elapsed() >= HEALTHY_RUN {
+            fails = 0;
+        }
+        let Err(e) = result else {
+            fails = 0;
+            continue;
+        };
+        fails += 1;
+        control.report_error(format!("audio capture restarting: {e:#}"));
+        // Per-app capture keeps failing: share everything for a while rather than nothing,
+        // then try per-app again (one more failure comes straight back here).
+        if fails >= FAILS_BEFORE_FALLBACK && !matches!(mode, AudioMode::All) {
+            control.report_error(format!("sharing all PC audio for {} s, then trying {} again", FALLBACK_TIME.as_secs(), describe(mode)));
+            if let Err(e) = run(control, tx, &AudioMode::All, &Plan::All, Some(Instant::now() + FALLBACK_TIME)) {
+                control.report_error(format!("all-audio fallback failed: {e:#}"));
+            }
+            fails = FAILS_BEFORE_FALLBACK - 1;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// Runs one pipeline until the plan changes (apps start/stop), `until` passes, or we're
+/// stopped. The pipeline is shut down however this exits.
+fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan, until: Option<Instant>) -> Result<()> {
     let (pipeline, sink) = launch(&pipeline_text(p), "audio", control)?;
     pipeline.set_state(gst::State::Playing).context("starting audio")?;
     let bus = pipeline.bus();
     let mut pending: Vec<i16> = Vec::with_capacity(CHUNK * 4);
     let mut last_check = Instant::now();
     loop {
-        if control.stop.load(Ordering::Relaxed) {
+        if control.stop.load(Ordering::Relaxed) || until.is_some_and(|t| Instant::now() >= t) {
             break Ok(());
         }
         if let Some(e) = bus.as_ref().and_then(|b| next_error(b, gst::ClockTime::ZERO)) {
@@ -167,7 +225,7 @@ fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p:
         }
         if !matches!(mode, AudioMode::All) && last_check.elapsed() > Duration::from_secs(3) {
             last_check = Instant::now();
-            if plan(mode).0 != *p {
+            if plan(mode)? != *p {
                 break Ok(());
             }
         }
@@ -183,5 +241,37 @@ fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p:
                 Err(TrySendError::Disconnected(_)) => return Ok(()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_app_streams, AppStream};
+
+    /// Trimmed `pw-dump` output: two app streams, our own stream, a sink and a stream with no
+    /// binary name.
+    const PW_DUMP: &str = r#"[
+      { "id": 30, "type": "PipeWire:Interface:Node", "info": { "props": {
+          "media.class": "Audio/Sink", "object.serial": 30, "node.name": "alsa_output.pci" } } },
+      { "id": 81, "type": "PipeWire:Interface:Node", "info": { "props": {
+          "media.class": "Stream/Output/Audio", "object.serial": 812, "application.process.id": 4242,
+          "application.process.binary": "Discord", "application.name": "WEBRTC VoiceEngine" } } },
+      { "id": 82, "type": "PipeWire:Interface:Node", "info": { "props": {
+          "media.class": "Stream/Output/Audio", "object.serial": 820, "application.process.id": "777",
+          "application.process.binary": "streamroom-live" } } },
+      { "id": 83, "type": "PipeWire:Interface:Node", "info": { "props": {
+          "media.class": "Stream/Output/Audio", "object.serial": 830, "application.name": "Firefox" } } },
+      { "id": 84, "type": "PipeWire:Interface:Client", "info": { "props": { "application.name": "pw-dump" } } }
+    ]"#;
+
+    #[test]
+    fn lists_app_output_streams_except_our_own() {
+        let list = parse_app_streams(PW_DUMP.as_bytes(), "777").unwrap();
+        assert_eq!(list, vec![AppStream { serial: 812, app: "discord".into() }, AppStream { serial: 830, app: "firefox".into() }]);
+    }
+
+    #[test]
+    fn rejects_output_that_isnt_json() {
+        assert!(parse_app_streams(b"pw-dump: can't connect", "1").is_err());
     }
 }
