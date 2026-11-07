@@ -1,0 +1,100 @@
+name: Windows app
+
+# Builds the Windows installer when Windows or shared app code changes (Linux-only changes
+# don't start it). To release: bump app/release/windows and push to main; it's published as
+# GitHub Release app-v<version>, which the site's /download page and the Windows updater use.
+# Unit tests run in the Linux workflow (they cover the shared code).
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "app/**"
+      - "!app/wincap/src/linux/**"
+      - "!app/packaging/**"
+      - "!app/release/linux"
+      - "!app/README.md"
+      - ".github/workflows/app-windows.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: app-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          VER=$(tr -d '[:space:]' < release/windows)
+          sed -i "0,/^version = .*/s//version = \"$VER\"/" Cargo.toml
+          echo "version=$VER" >> "$GITHUB_OUTPUT"; echo "Windows $VER"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Build installer
+        working-directory: app/desktop
+        run: npx --yes @tauri-apps/cli@2 build --ci
+
+      - name: Build command-line tool
+        run: cargo build --release -p streamroom-cli --features testsrc
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $setup = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "installer not found" }
+          Copy-Item $setup.FullName dist/Streamroom-Live-Setup.exe
+          Copy-Item target/release/streamroom-live-cli.exe dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streamroom-live-windows
+          path: app/dist/
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: streamroom-live-windows
+          path: dist
+
+      - name: Publish (if this version isn't released yet)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: app-v${{ needs.build.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then echo "$TAG already released"; exit 0; fi
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          printf '%s\n' "Download **Streamroom-Live-Setup.exe** below and run it. Windows may say it protected your PC: click **More info**, then **Run anyway**." "" "Installed copies update themselves." > ../notes.md
+          gh release create "$TAG" --repo "$REPO" --target "${{ github.sha }}" * \
+            --title "Streamroom Live ${TAG#app-v} for Windows" --latest --notes-file ../notes.md

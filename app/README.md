@@ -7,7 +7,7 @@ frame rates than browser screen sharing.
 
 **Linux (Arch, CachyOS and other Arch-based distros):**
 ```
-curl -LO https://github.com/Saroknight/stream.eventworks/releases/latest/download/streamroom-live-x86_64.pkg.tar.zst && sudo pacman -U streamroom-live-x86_64.pkg.tar.zst
+curl -L -o streamroom-live-x86_64.pkg.tar.zst https://stream.eventworks.click/api/app/download/linux && sudo pacman -U streamroom-live-x86_64.pkg.tar.zst
 ```
 pacman pulls in GStreamer (VA-API for AMD/Intel, x264 as a fallback), PipeWire and the screen-share
 portal. On Wayland the desktop asks once which screen or window to share; the choice is remembered
@@ -73,11 +73,19 @@ streamroom-live-cli.exe "https://stream.example.com/live/ROOM#k=KEY" [options]
 
 ## Releasing
 
-Bump `version` in `app/Cargo.toml` and push to `main`. The **Windows app** workflow builds the
-installer and, because that version has no release yet, publishes it as `app-vX.Y.Z`. Installed
-apps pick it up within a few hours (or at their next start). If publishing fails, any later push
-that touches `app/` tries again, as long as that version has no release yet. Pushes that don't change the
-version just build, with the installer attached to the workflow run.
+Windows and Linux are built and released separately, each with its own version:
+
+| | Version file | Workflow | Release tag |
+|---|---|---|---|
+| Windows | `app/release/windows` | `.github/workflows/app-windows.yml` | `app-vX.Y.Z` (marked latest) |
+| Linux | `app/release/linux` | `.github/workflows/app-linux.yml` | `linux-vX.Y.Z` |
+
+Each workflow only runs when its platform's files or the shared code change (a change under
+`wincap/src/linux/` doesn't build Windows; a change to Windows capture doesn't build Linux; `core`,
+`desktop` and the UI build both). To release a platform, bump its version file and push to
+`main`: the build is published if that version has no release yet. Otherwise the build is just
+attached to the workflow run. Installed apps only look at their own platform's releases. The
+`version` in `app/Cargo.toml` is only for local builds; CI replaces it with the platform's.
 
 ## How it works
 
@@ -91,8 +99,8 @@ version just build, with the installer attached to the workflow run.
 
 ## Build
 
-Windows builds run on GitHub Actions (`.github/workflows/app.yml`); download the
-`streamroom-live-windows` artifact from the workflow run. Locally:
+Builds run on GitHub Actions (`app-windows.yml`, `app-linux.yml`); download the
+`streamroom-live-windows` or `streamroom-live-linux` artifact from the workflow run. Locally:
 
 ```
 cargo build --release

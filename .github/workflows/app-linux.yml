@@ -1,74 +1,42 @@
-name: Windows and Linux app
+name: Linux app
 
-# Every push that touches the app builds it for Windows (installer) and Arch Linux (pacman
-# package); download them from the run's artifacts. On main, if app/Cargo.toml has a version
-# with no release yet, both are published as GitHub Release app-v<version>: that's what the
-# site's /download page and the app's auto-updater use. So to release: bump the version and
-# push to main. Each platform is published as soon as its build finishes (app-publish.yml).
+# Builds the Arch Linux pacman package when Linux or shared app code changes (Windows-only
+# changes don't start it). To release: bump app/release/linux and push to main; it's published
+# as GitHub Release linux-v<version>, which the site's download command and the Linux updater use.
 
 on:
   push:
     branches: ["**"]
     paths:
       - "app/**"
-      - ".github/workflows/app.yml"
+      - "!app/wincap/src/audio.rs"
+      - "!app/wincap/src/capture.rs"
+      - "!app/wincap/src/convert.rs"
+      - "!app/wincap/src/cursor.rs"
+      - "!app/wincap/src/d3d.rs"
+      - "!app/wincap/src/encoder.rs"
+      - "!app/wincap/src/pipeline.rs"
+      - "!app/desktop/src/account.rs"
+      - "!app/desktop/icons/icon.ico"
+      - "!app/release/windows"
+      - "!app/README.md"
+      - ".github/workflows/app-linux.yml"
   workflow_dispatch:
 
 concurrency:
-  group: app-${{ github.ref }}
+  group: app-linux-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: app
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: app
-
-      - name: Unit tests
-        run: cargo test -p streamroom-core -p streamroom-desktop
-
-      - name: Build installer
-        working-directory: app/desktop
-        run: npx --yes @tauri-apps/cli@2 build --ci
-
-      - name: Build command-line tool
-        run: cargo build --release -p streamroom-cli --features testsrc
-
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          $setup = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
-          if (-not $setup) { throw "installer not found" }
-          Copy-Item $setup.FullName dist/Streamroom-Live-Setup.exe
-          Copy-Item target/release/streamroom-live-cli.exe dist/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: streamroom-live-windows
-          path: app/dist/
-          retention-days: 30
-
-  linux:
+  build:
     runs-on: ubuntu-latest
     # Built on Arch itself, against Arch's libraries (CachyOS, EndeavourOS... use the same).
     container: archlinux:base-devel
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - name: Build tools and libraries
         run: |
@@ -79,6 +47,14 @@ jobs:
           rustup default stable
 
       - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        working-directory: app
+        run: |
+          VER=$(tr -d '[:space:]' < release/linux)
+          sed -i "0,/^version = .*/s//version = \"$VER\"/" Cargo.toml
+          echo "version=$VER" >> "$GITHUB_OUTPUT"; echo "Linux $VER"
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -98,8 +74,9 @@ jobs:
 
       - name: Package (pacman)
         working-directory: app
+        env:
+          VER: ${{ steps.ver.outputs.version }}
         run: |
-          VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           BIN=$(ls target/release/streamroom-live "target/release/Streamroom Live" 2>/dev/null | head -1)
           test -n "$BIN" || { ls target/release; exit 1; }
           mkdir -p /tmp/pkg dist
@@ -120,22 +97,31 @@ jobs:
           path: app/dist/
           retention-days: 30
 
-  # Each platform is published as soon as it's built (Linux is much quicker), into the same
-  # release app-v<version>; SHA256SUMS is merged so both updaters can verify their file.
-  publish-linux:
-    needs: linux
+  publish:
+    needs: build
     if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/app-publish.yml
-    with:
-      artifact: streamroom-live-linux
+    runs-on: ubuntu-latest
     permissions:
       contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: streamroom-live-linux
+          path: dist
 
-  publish-windows:
-    needs: windows
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/app-publish.yml
-    with:
-      artifact: streamroom-live-windows
-    permissions:
-      contents: write
+      - name: Publish (if this version isn't released yet)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: linux-v${{ needs.build.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then echo "$TAG already released"; exit 0; fi
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          URL="https://github.com/$REPO/releases/download/$TAG/streamroom-live-x86_64.pkg.tar.zst"
+          printf '%s\n' "For Arch Linux and CachyOS. Install or update by hand:" '```' \
+            "curl -LO $URL && sudo pacman -U streamroom-live-x86_64.pkg.tar.zst" '```' "" \
+            "Installed copies update themselves." > ../notes.md
+          # Not marked latest: "latest" stays the Windows release, which the site and older
+          # Windows apps look at.
+          gh release create "$TAG" --repo "$REPO" --target "${{ github.sha }}" * \
+            --title "Streamroom Live ${TAG#linux-v} for Linux" --latest=false --notes-file ../notes.md

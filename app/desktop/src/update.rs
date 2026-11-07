@@ -14,6 +14,11 @@ const SETUP: &str = "Streamroom-Live-Setup.exe";
 #[cfg(target_os = "linux")]
 const SETUP: &str = "streamroom-live-x86_64.pkg.tar.zst";
 const SUMS: &str = "SHA256SUMS";
+/// Each platform has its own releases: Windows is app-v<version>, Linux is linux-v<version>.
+#[cfg(not(target_os = "linux"))]
+const TAG: &str = "app-v";
+#[cfg(target_os = "linux")]
+const TAG: &str = "linux-v";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Available {
@@ -30,6 +35,10 @@ struct Release {
     tag_name: String,
     #[serde(default)]
     body: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
     assets: Vec<Asset>,
 }
 
@@ -46,24 +55,28 @@ fn client() -> Result<reqwest::Client> {
         .build()?)
 }
 
-/// "0.10.2" > "0.9.9", ignoring a leading "app-v" / "v".
+/// "0.10.2" > "0.9.9", ignoring a leading tag prefix ("app-v", "linux-v", "v").
 fn newer(candidate: &str, current: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
-        v.trim_start_matches("app-v").trim_start_matches('v').split(['.', '-']).map_while(|p| p.parse().ok()).collect()
+        v.trim_start_matches(|c: char| !c.is_ascii_digit()).split(['.', '-']).map_while(|p| p.parse().ok()).collect()
     };
     parse(candidate) > parse(current)
 }
 
 pub async fn check() -> Result<Option<Available>> {
-    let r: Release = client()?
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
+    let list: Vec<Release> = client()?
+        .get(format!("https://api.github.com/repos/{REPO}/releases?per_page=30"))
         .header("Accept", "application/vnd.github+json")
         .send()
         .await?
         .error_for_status()?
         .json()
         .await?;
-    let version = r.tag_name.trim_start_matches("app-v").trim_start_matches('v').to_string();
+    // Newest first; the first published release of this platform is the one to compare with.
+    let Some(r) = list.into_iter().find(|r| !r.draft && !r.prerelease && r.tag_name.starts_with(TAG)) else {
+        return Ok(None);
+    };
+    let version = r.tag_name[TAG.len()..].to_string();
     if !newer(&version, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
     }

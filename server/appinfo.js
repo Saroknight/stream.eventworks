@@ -4,15 +4,15 @@ import express from 'express';
 
 export const APP_RELEASES_REPO = process.env.APP_RELEASES_REPO || 'Saroknight/stream.eventworks';
 const SETUP = 'Streamroom-Live-Setup.exe';
+const LINUX_PKG = 'streamroom-live-x86_64.pkg.tar.zst';
 const CACHE_MS = 10 * 60_000;
 
-let cache = { at: 0, value: null };
+// Windows releases are tagged app-v<version>, Linux ones linux-v<version>.
+let cache = { at: 0, value: null, linux: null };
 
 async function latest() {
   if (cache.value && Date.now() - cache.at < CACHE_MS) return cache.value;
   try {
-    // The newest release that has the Windows installer (Linux is published first, so for a few
-    // minutes the very latest release may not have it yet).
     const r = await fetch(`https://api.github.com/repos/${APP_RELEASES_REPO}/releases?per_page=10`, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'streamroom-server' },
       signal: AbortSignal.timeout(5000),
@@ -21,10 +21,13 @@ async function latest() {
       cache = { at: Date.now(), value: { version: null } };
     } else if (r.ok) {
       const list = (await r.json()).filter((x) => !x.draft && !x.prerelease);
-      const rel = list.find((x) => (x.assets || []).some((a) => a.name === SETUP)) || {};
+      const has = (name) => (x) => (x.assets || []).some((a) => a.name === name);
+      const rel = list.find((x) => /^app-v/.test(x.tag_name) && has(SETUP)(x)) || {};
       const asset = (rel.assets || []).find((a) => a.name === SETUP);
+      const lrel = list.find((x) => /^(linux|app)-v/.test(x.tag_name) && has(LINUX_PKG)(x));
       cache = {
         at: Date.now(),
+        linux: lrel ? lrel.assets.find((a) => a.name === LINUX_PKG).browser_download_url : null,
         value: {
           version: asset ? String(rel.tag_name || '').replace(/^app-v|^v/, '') : null,
           published: rel.published_at || null,
@@ -46,4 +49,10 @@ router.get('/app/latest', async (_req, res) => {
 router.get('/app/download', async (_req, res) => {
   const v = await latest();
   res.redirect(v.url || `https://github.com/${APP_RELEASES_REPO}/releases/latest/download/${SETUP}`);
+});
+// The Linux package, from the newest Linux release (used by the download page's command).
+router.get('/app/download/linux', async (_req, res) => {
+  await latest();
+  if (!cache.linux) return res.status(404).type('text').send('No Linux release yet.\n');
+  res.redirect(cache.linux);
 });

@@ -63,7 +63,7 @@
             <h1>Streamroom Live for Linux</h1>
             <p class="lead">For Arch and Arch-based distros (CachyOS, EndeavourOS, Manjaro). Encodes on your graphics card: VA-API on AMD and Intel, NVENC on NVIDIA. Works on Wayland (KDE, GNOME, Hyprland) and X11.</p>
             <div class="cmd">
-              <code id="linuxCmd">curl -LO https://github.com/Saroknight/stream.eventworks/releases/latest/download/streamroom-live-x86_64.pkg.tar.zst &amp;&amp; sudo pacman -U streamroom-live-x86_64.pkg.tar.zst</code>
+              <code id="linuxCmd">curl -L -o streamroom-live-x86_64.pkg.tar.zst https://stream.eventworks.click/api/app/download/linux &amp;&amp; sudo pacman -U streamroom-live-x86_64.pkg.tar.zst</code>
               <button class="btn sm" type="button" id="copyCmd">Copy</button>
             </div>
             <span class="hint" id="dlMetaLinux">Free · installs with pacman, along with the GStreamer pieces it needs</span>
@@ -113,6 +113,9 @@
         }
       }
     } catch {}
+    // The command downloads from this server (it points at the newest Linux release).
+    const cmd = document.getElementById('linuxCmd');
+    cmd.textContent = `curl -L -o streamroom-live-x86_64.pkg.tar.zst ${location.origin}/api/app/download/linux && sudo pacman -U streamroom-live-x86_64.pkg.tar.zst`;
     // Windows or Linux: show the one this computer runs (either can be picked).
     const ua = navigator.userAgent;
     const isLinux = /Linux/.test(ua) && !/Android/.test(ua);
