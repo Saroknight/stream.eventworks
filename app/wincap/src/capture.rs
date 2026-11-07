@@ -73,7 +73,8 @@ impl Duplicator {
                 return Ok(Grab::Lost);
             }
         }
-        let dup = self.dup.clone().unwrap(); // COM AddRef, so we can update self below
+        // COM AddRef, so we can update self below.
+        let dup = self.dup.clone().expect("recreate() succeeded, so the duplication is set");
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
         match unsafe { dup.AcquireNextFrame(timeout_ms, &mut info, &mut resource) } {
@@ -81,10 +82,10 @@ impl Duplicator {
                 self.holding = true;
                 let cursor_changed = self.update_cursor(&dup, &info);
                 // LastPresentTime == 0 means only the mouse moved, not a new image.
-                if info.LastPresentTime == 0 || resource.is_none() {
+                let Some(resource) = resource.filter(|_| info.LastPresentTime != 0) else {
                     return Ok(if cursor_changed { Grab::Cursor } else { Grab::Nothing });
-                }
-                let tex: ID3D11Texture2D = resource.unwrap().cast().context("desktop image as texture")?;
+                };
+                let tex: ID3D11Texture2D = resource.cast().context("desktop image as texture")?;
                 Ok(Grab::Frame(tex))
             }
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => Ok(Grab::Nothing),

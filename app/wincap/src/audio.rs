@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender, TrySendError};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -329,7 +329,8 @@ struct Done(Arc<(Mutex<bool>, Condvar)>);
 impl IActivateAudioInterfaceCompletionHandler_Impl for Done_Impl {
     fn ActivateCompleted(&self, _op: Ref<IActivateAudioInterfaceAsyncOperation>) -> windows::core::Result<()> {
         let (lock, cv) = &*self.0;
-        *lock.lock().unwrap() = true;
+        // A poisoned lock still holds a usable flag.
+        *lock.lock().unwrap_or_else(PoisonError::into_inner) = true;
         cv.notify_all();
         Ok(())
     }
