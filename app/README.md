@@ -5,6 +5,17 @@ frame rates than browser screen sharing.
 
 ## Install
 
+**Linux (Arch, CachyOS and other Arch-based distros):**
+```
+curl -LO https://github.com/Saroknight/stream.eventworks/releases/latest/download/streamroom-live-x86_64.pkg.tar.zst && sudo pacman -U streamroom-live-x86_64.pkg.tar.zst
+```
+pacman pulls in GStreamer (VA-API for AMD/Intel, x264 as a fallback), PipeWire and the screen-share
+portal. On Wayland the desktop asks once which screen or window to share; the choice is remembered
+(Settings → Screen → *Ask every time* to pick again). Updates install through pacman (password
+prompt). NVIDIA: also install `gst-plugins-bad` for NVENC.
+
+**Windows:**
+
 Download **Streamroom-Live-Setup.exe** from the site's `/download` page (or this repo's
 latest GitHub Release) and run it. It installs per-user, so no admin prompt. Windows SmartScreen
 may warn that the app is unrecognized (it isn't code-signed): click **More info → Run anyway**.
@@ -37,7 +48,8 @@ mid-stream). Updates are verified against the release's `SHA256SUMS` before they
 
 | Folder | What |
 |---|---|
-| `wincap/` | Windows capture, cursor drawing, GPU conversion and hardware encoding |
+| `wincap/` | Capture and hardware encoding: Windows (DXGI, Media Foundation, WASAPI) and Linux (`src/linux/`: portal/PipeWire or X11, GStreamer, PipeWire sound) |
+| `packaging/arch/` | PKGBUILD and .desktop file for the Arch package (built by CI) |
 | `core/` | Sign-in and the server API (`api.rs`), links, and publishing the stream |
 | `desktop/` | The Tauri app: window (`ui/`), tray, deep links, updater, installer config |
 | `cli/` | `streamroom-live-cli.exe`, the same engine from a terminal (troubleshooting) |

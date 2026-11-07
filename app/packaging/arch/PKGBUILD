@@ -23,7 +23,7 @@ optdepends=(
   'xdg-desktop-portal-gnome: screen sharing on GNOME'
   'xdg-desktop-portal-hyprland: screen sharing on Hyprland'
 )
-options=('!strip' '!debug')
+options=('!debug')
 
 package() {
   install -Dm755 "$startdir/streamroom-live"          "$pkgdir/usr/bin/streamroom-live"
