@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use gstreamer_app as gst_app;
 
+use super::launch::{launch, next_error};
 use crate::{AudioChunk, AudioMode, Control};
 
 const RATE: u32 = 48_000;
@@ -150,30 +150,10 @@ pub fn start_audio(control: Arc<Control>, tx: SyncSender<AudioChunk>, mode: Audi
     Ok((handle, desc))
 }
 
-/// Shuts the pipeline down however `run` exits. A pipeline dropped while not in Null keeps its
-/// threads and PipeWire streams alive, so every failed start used to leak one.
-struct Stopping<'a> {
-    pipeline: gst::Pipeline,
-    control: &'a Control,
-}
-
-impl Drop for Stopping<'_> {
-    fn drop(&mut self) {
-        if let Err(e) = self.pipeline.set_state(gst::State::Null) {
-            self.control.report_error(format!("stopping the audio pipeline: {e}"));
-        }
-    }
-}
-
 /// Runs one pipeline until the plan changes (apps start/stop) or we're stopped.
-fn run(control: &Control, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan) -> Result<()> {
-    let pipeline = gst::parse::launch(&pipeline_text(p))
-        .context("building the audio pipeline")?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| anyhow!("not a pipeline"))?;
-    let stopping = Stopping { pipeline, control };
-    let pipeline = &stopping.pipeline;
-    let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or_else(|| anyhow!("no sink"))?;
+/// The pipeline is shut down however this exits.
+fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan) -> Result<()> {
+    let (pipeline, sink) = launch(&pipeline_text(p), "audio", control)?;
     pipeline.set_state(gst::State::Playing).context("starting audio")?;
     let bus = pipeline.bus();
     let mut pending: Vec<i16> = Vec::with_capacity(CHUNK * 4);
@@ -182,10 +162,8 @@ fn run(control: &Control, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Pla
         if control.stop.load(Ordering::Relaxed) {
             break Ok(());
         }
-        if let Some(msg) = bus.as_ref().and_then(|b| b.pop_filtered(&[gst::MessageType::Error])) {
-            if let gst::MessageView::Error(e) = msg.view() {
-                break Err(anyhow!("{}", e.error()));
-            }
+        if let Some(e) = bus.as_ref().and_then(|b| next_error(b, gst::ClockTime::ZERO)) {
+            break Err(anyhow!(e.message));
         }
         if !matches!(mode, AudioMode::All) && last_check.elapsed() > Duration::from_secs(3) {
             last_check = Instant::now();

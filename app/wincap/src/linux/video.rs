@@ -16,6 +16,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 
+use super::launch::{launch, next_error, Pipeline, PipelineError};
 use super::portal;
 use crate::{Control, EncodedFrame, VideoInfo, VideoOptions};
 
@@ -161,7 +162,7 @@ fn caps_size(caps: &gst::CapsRef) -> Option<(u32, u32)> {
 }
 
 struct Running {
-    pipeline: gst::Pipeline,
+    pipeline: Pipeline,
     sink: gst_app::AppSink,
     enc: gst::Element,
     first: gst::Sample,
@@ -220,47 +221,37 @@ fn cap_frame_rate(enc: &gst::Element, fps: u32) -> Result<()> {
     Ok(())
 }
 
-/// Starts a pipeline and waits for its first encoded frame (or an error).
-fn try_start(text: &str, fps: u32) -> Result<Running> {
-    let pipeline =
-        gst::parse::launch(text).context("building the video pipeline")?.downcast::<gst::Pipeline>().map_err(|_| anyhow!("not a pipeline"))?;
-    let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or_else(|| anyhow!("no sink"))?;
-    let enc = pipeline.by_name("enc").ok_or_else(|| anyhow!("no encoder"))?;
+/// Starts a pipeline and waits for its first encoded frame (or an error). On failure the
+/// pipeline is shut down as it's dropped.
+fn try_start(text: &str, fps: u32, control: &Arc<Control>) -> Result<Running> {
+    let (pipeline, sink) = launch(text, "video", control)?;
+    let enc = pipeline.by_name("enc").ok_or_else(|| anyhow!("the video pipeline has no encoder"))?;
     cap_frame_rate(&enc, fps).context("capping the frame rate")?;
-    let bus = pipeline.bus().ok_or_else(|| anyhow!("no bus"))?;
+    let bus = pipeline.bus().ok_or_else(|| anyhow!("the video pipeline has no message bus"))?;
     if pipeline.set_state(gst::State::Playing).is_err() {
         // The real reason is on the bus: which element refused, and why.
-        let why = bus
-            .timed_pop_filtered(gst::ClockTime::from_seconds(1), &[gst::MessageType::Error])
-            .and_then(|m| match m.view() {
-                gst::MessageView::Error(e) => Some(format!(
-                    "{}: {} ({})",
-                    e.src().map(|s| s.path_string().to_string()).unwrap_or_default(),
-                    e.error(),
-                    e.debug().map(|d| d.to_string()).unwrap_or_default()
-                )),
-                _ => None,
-            })
-            .unwrap_or_else(|| "an element refused to start (no details)".into());
-        let _ = pipeline.set_state(gst::State::Null);
-        bail!("starting the video pipeline: {why}");
+        let Some(why) = next_error(&bus, gst::ClockTime::from_seconds(1)) else {
+            bail!("starting the video pipeline: an element refused to start (no details)");
+        };
+        return Err(anyhow::Error::new(why).context("starting the video pipeline"));
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
-            let _ = pipeline.set_state(gst::State::Null);
-            if let gst::MessageView::Error(e) = msg.view() {
-                bail!("{} ({})", e.error(), e.debug().map(|d| d.to_string()).unwrap_or_default());
-            }
+        if let Some(why) = next_error(&bus, gst::ClockTime::ZERO) {
+            return Err(why.into());
         }
         if let Some(first) = sink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
             return Ok(Running { pipeline, sink, enc, first });
         }
         if Instant::now() > deadline {
-            let _ = pipeline.set_state(gst::State::Null);
             bail!("no video came through in 10 seconds");
         }
     }
+}
+
+/// PipeWire couldn't find the screen stream the way this pipeline named it.
+fn is_target_not_found(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<PipelineError>().is_some_and(PipelineError::target_not_found)
 }
 
 /// A node PipeWire shows on the portal's connection.
@@ -311,7 +302,11 @@ fn visible_nodes(p: &portal::PortalStream) -> String {
 }
 
 /// Tries each available encoder in order; the first that produces video wins.
-fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(Running, Enc, Vec<String>, String), Vec<String>> {
+fn start_encoders(
+    screen: &Screen,
+    opts: &VideoOptions,
+    control: &Arc<Control>,
+) -> std::result::Result<(Running, Enc, Vec<String>, String), Vec<String>> {
     let mut tried = Vec::new();
     let mut targets = screen.targets();
     for enc in ENCODERS.iter().filter(|e| available(e.element)) {
@@ -322,15 +317,14 @@ fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(
         // to the next way (for this and the following encoders).
         loop {
             let target = targets[0].clone();
-            match try_start(&pipeline_text(screen, &target, enc, opts), opts.fps) {
+            match try_start(&pipeline_text(screen, &target, enc, opts), opts.fps, control) {
                 Ok(r) => {
                     return Ok((r, *enc, tried, target));
                 }
                 Err(e) => {
-                    let msg = format!("{e:#}");
                     let label = if target.is_empty() { "no target".to_string() } else { target.clone() };
-                    tried.push(format!("{} [{label}]: {msg}", enc.element));
-                    if msg.contains("target not found") && targets.len() > 1 {
+                    tried.push(format!("{} [{label}]: {e:#}", enc.element));
+                    if is_target_not_found(&e) && targets.len() > 1 {
                         targets.remove(0);
                         continue;
                     }
@@ -362,15 +356,17 @@ pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<Enc
     };
 
     let mut screen = open_screen(opts.monitor != ASK_EVERY_TIME)?;
-    let mut result = start_encoders(&screen, &opts);
+    let mut result = start_encoders(&screen, &opts, &control);
     // A remembered screen choice can go stale (the desktop restores a session we can't read):
     // forget it and ask once more before giving up.
     if result.is_err() && matches!(&screen, Screen::Portal(p) if p.restored) {
         let first = result.err().unwrap_or_default();
         drop(screen); // closes that portal session
-        portal::forget();
+        if let Err(e) = portal::forget() {
+            control.report_error(format!("couldn't forget the remembered screen: {e:#}"));
+        }
         screen = open_screen(false)?;
-        result = start_encoders(&screen, &opts).map_err(|mut t| {
+        result = start_encoders(&screen, &opts, &control).map_err(|mut t| {
             t.insert(0, format!("with the remembered screen: {}", first.join("; ")));
             t
         });
@@ -429,14 +425,13 @@ pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<Enc
 
     let handle = std::thread::Builder::new().name("video".into()).spawn(move || {
         let Running { pipeline, sink, enc: enc_el, first } = run;
-        let _screen = screen; // keeps the portal fd open
         let bus = pipeline.bus();
         let mut next = Some(first);
         while !control.stop.load(Ordering::Relaxed) {
             if let Some(msg) = bus.as_ref().and_then(|b| b.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])) {
-                let why = match msg.view() {
-                    gst::MessageView::Error(e) => format!("video stopped: {}", e.error()),
-                    _ => "video stopped: the screen share ended".into(),
+                let why = match PipelineError::from_message(&msg) {
+                    Some(e) => format!("video stopped: {}", e.message),
+                    None => "video stopped: the screen share ended".into(),
                 };
                 control.report_error(why);
                 control.stop.store(true, Ordering::Relaxed);
@@ -475,7 +470,9 @@ pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<Enc
                 Err(TrySendError::Disconnected(_)) => break,
             }
         }
-        let _ = pipeline.set_state(gst::State::Null);
+        // The screen share (portal fd) stays open until here; stop the pipeline reading it first.
+        drop(pipeline);
+        drop(screen);
         control.stop.store(true, Ordering::Relaxed);
     })?;
     Ok((info, handle))
