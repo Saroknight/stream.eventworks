@@ -1,4 +1,4 @@
-name: Site tests
+name: "Website: E2E tests"
 
 # On every push: start LiveKit and the site on a fresh machine and drive real browsers through
 # sign-in, invites, rooms, streaming and the app hand-off (tests/e2e.mjs).
@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   e2e:
+    name: Browser E2E (sign-in, rooms, streaming)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -48,8 +49,9 @@ jobs:
   # The real installer on a fresh Ubuntu machine, then video with the normal video ports
   # blocked for the browser: it can only arrive through the port 443 relay.
   # The relay is optional and parked, so this runs only when started by hand (Actions tab ->
-  # Site tests -> Run workflow).
+  # Website: E2E tests -> Run workflow).
   relay:
+    name: Relay E2E (installer, port 443 relay)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 25

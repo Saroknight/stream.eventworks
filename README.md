@@ -97,7 +97,7 @@ command, and `turn.<domain>` pointing at the server, setup turns on LiveKit's TU
 between the site and the relay, told apart by name. That needs the Caddy build with the
 [layer4](https://github.com/mholt/caddy-l4) module, which setup downloads from caddyserver.com.
 The new config is validated first; on any problem setup keeps the normal config and says why.
-The CI job **Site tests → relay** (run by hand) checks it end to end with the video ports blocked,
+The CI job **Website: E2E tests → Relay E2E** (run by hand) checks it end to end with the video ports blocked,
 and the admin Health panel's **Test** button checks it on the live server.
 
 | Path | Contents |
@@ -140,9 +140,9 @@ CLAUDE.md            notes for working on the code (architecture, CI, releasing,
 
 | Workflow | When | What |
 |---|---|---|
-| **Site tests** | every push outside `app/` (not docs), and pull requests | `tests/e2e.mjs`: LiveKit + the site + real Chromium through sign-in, invites, rooms, streaming, the app hand-off, Health and admin removal |
-| **Windows app** | changes to Windows or shared app code | installer + console tool; publishes `app-vX.Y.Z` when `app/release/windows` is bumped |
-| **Linux app** | changes to Linux or shared app code | unit tests, app, console tool, pacman package; publishes `linux-vX.Y.Z` when `app/release/linux` is bumped |
+| **Website: E2E tests** | every push outside `app/` (not docs), and pull requests | `tests/e2e.mjs`: LiveKit + the site + real Chromium through sign-in, invites, rooms, streaming, the app hand-off, Health and admin removal |
+| **Client app: Windows build** | changes to Windows or shared app code | installer + console tool; publishes `app-vX.Y.Z` when `app/release/windows` is bumped |
+| **Client app: Linux build** | changes to Linux or shared app code | unit tests, app, console tool, pacman package; publishes `linux-vX.Y.Z` when `app/release/linux` is bumped |
 
 Run the site test locally with `npm run test:e2e` (needs `livekit-server` and
 `npx playwright install chromium`).

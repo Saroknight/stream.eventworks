@@ -1,4 +1,4 @@
-name: Windows app
+name: "Client app: Windows build"
 
 # Builds the Windows installer when Windows or shared app code changes (Linux-only changes
 # don't start it). To release: bump app/release/windows and push to main; it's published as
@@ -26,6 +26,7 @@ permissions:
 
 jobs:
   build:
+    name: Build and package
     runs-on: windows-latest
     defaults:
       run:
@@ -76,6 +77,7 @@ jobs:
           retention-days: 30
 
   publish:
+    name: Publish release
     needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

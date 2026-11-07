@@ -1,4 +1,4 @@
-name: Linux app
+name: "Client app: Linux build"
 
 # Builds the Arch Linux pacman package when Linux or shared app code changes (Windows-only
 # changes don't start it). To release: bump app/release/linux and push to main; it's published
@@ -32,6 +32,7 @@ permissions:
 
 jobs:
   build:
+    name: Build and package
     runs-on: ubuntu-latest
     # Built on Arch itself, against Arch's libraries (CachyOS, EndeavourOS... use the same).
     container: archlinux:base-devel
@@ -107,6 +108,7 @@ jobs:
           retention-days: 30
 
   publish:
+    name: Publish release
     needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
