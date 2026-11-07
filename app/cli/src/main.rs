@@ -144,7 +144,7 @@ async fn run() -> Result<()> {
         );
         let _ = std::io::stdout().flush();
         ticks += 1;
-        if ticks % 10 == 0 {
+        if ticks.is_multiple_of(10) {
             log::info(&format!("stats: {s:?}"));
         }
     };

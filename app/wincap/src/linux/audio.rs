@@ -92,7 +92,7 @@ fn plan(mode: &AudioMode) -> (Plan, String) {
         }
         AudioMode::Apps(names) => {
             let want: Vec<String> = names.iter().map(|n| n.to_ascii_lowercase()).collect();
-            let keep: Vec<u64> = app_streams().iter().filter(|a| want.iter().any(|w| a.app == *w)).map(|a| a.serial).collect();
+            let keep: Vec<u64> = app_streams().iter().filter(|a| want.contains(&a.app)).map(|a| a.serial).collect();
             (Plan::Streams(keep), format!("only {}", names.join(", ")))
         }
     }
@@ -196,7 +196,7 @@ fn run(control: &Control, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Pla
         let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(50)) else { continue };
         let Some(buf) = sample.buffer() else { continue };
         let Ok(map) = buf.map_readable() else { continue };
-        pending.extend(map.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+        pending.extend(map.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)));
         while pending.len() >= CHUNK {
             let samples: Vec<i16> = pending.drain(..CHUNK).collect();
             control.stats.audio_chunks.fetch_add(1, Ordering::Relaxed);
