@@ -8,7 +8,7 @@
 use std::os::fd::AsRawFd;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -137,11 +137,11 @@ fn pipeline_text(screen: &Screen, target: &str, enc: &Enc, opts: &VideoOptions) 
         format!("videoconvert ! videoscale ! video/x-raw,format={fmt}{size}")
     };
     format!(
-        // PipeWire screens have a variable frame rate (0/1), and then videorate's max-rate lets
-        // everything through (a 165 Hz monitor sent 165 fps, starving each frame of bitrate).
-        // A fixed output rate makes it drop down to the setting (drop-only: never duplicates).
+        // The frame rate is capped by `FrameGate` at the encoder's input, not here: PipeWire
+        // screens have a variable rate (0/1), so max-rate alone lets everything through, and a
+        // fixed framerate in the caps makes GNOME's screen stream fail to negotiate.
         "{src} ! queue max-size-buffers=2 leaky=downstream ! videorate drop-only=true max-rate={fps} ! \
-         video/x-raw,framerate={fps}/1 ! {convert} ! \
+         {convert} ! \
          {enc} name=enc {settings} ! h264parse config-interval=-1 ! \
          video/x-h264,stream-format=byte-stream,alignment=au ! \
          appsink name=sink sync=false max-buffers=4 drop=true",
@@ -167,14 +167,68 @@ struct Running {
     first: gst::Sample,
 }
 
+/// Lets frames through at no more than the chosen rate, by their timestamps. Screens can send
+/// far more (a 165 Hz monitor sends 165 fps), which starves each frame of bitrate. Runs before
+/// the encoder: dropping encoded H.264 frames would break the ones that refer to them.
+#[derive(Debug)]
+struct FrameGate {
+    /// Nanoseconds between frames at the chosen rate.
+    interval: u64,
+    /// How early a frame may be and still count as on time (timestamps jitter).
+    slack: u64,
+    /// When the next frame is due; `None` before the first one.
+    next: Option<u64>,
+}
+
+impl FrameGate {
+    fn new(fps: u32) -> Self {
+        let interval = 1_000_000_000 / u64::from(fps.max(1));
+        Self { interval, slack: interval / 4, next: None }
+    }
+
+    /// Whether the frame stamped `pts` (nanoseconds) goes through.
+    fn admit(&mut self, pts: u64) -> bool {
+        let next = match self.next {
+            // A timestamp well before the schedule means the clock restarted: start over.
+            Some(next) if pts + self.interval + self.slack < next => pts + self.interval,
+            Some(next) if pts + self.slack < next => return false,
+            // After a pause (a still screen sends nothing), don't let frames burst to catch up.
+            Some(next) if pts > next + self.interval => pts + self.interval,
+            Some(next) => next + self.interval,
+            None => pts + self.interval,
+        };
+        self.next = Some(next);
+        true
+    }
+}
+
+/// Drops raw frames that arrive sooner than `fps` allows, at the encoder's input.
+fn cap_frame_rate(enc: &gst::Element, fps: u32) -> Result<()> {
+    let pad = enc.static_pad("sink").ok_or_else(|| anyhow!("the encoder has no input"))?;
+    let gate = Mutex::new(FrameGate::new(fps));
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        let Some(pts) = info.buffer().and_then(|b| b.pts()) else { return gst::PadProbeReturn::Ok };
+        // A poisoned lock only means an earlier call panicked; the gate's state is still usable.
+        let mut gate = gate.lock().unwrap_or_else(PoisonError::into_inner);
+        if gate.admit(pts.nseconds()) {
+            gst::PadProbeReturn::Ok
+        } else {
+            gst::PadProbeReturn::Drop
+        }
+    })
+    .ok_or_else(|| anyhow!("couldn't watch the encoder's input"))?;
+    Ok(())
+}
+
 /// Starts a pipeline and waits for its first encoded frame (or an error).
-fn try_start(text: &str) -> Result<Running> {
+fn try_start(text: &str, fps: u32) -> Result<Running> {
     let pipeline = gst::parse::launch(text)
         .context("building the video pipeline")?
         .downcast::<gst::Pipeline>()
         .map_err(|_| anyhow!("not a pipeline"))?;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or_else(|| anyhow!("no sink"))?;
     let enc = pipeline.by_name("enc").ok_or_else(|| anyhow!("no encoder"))?;
+    cap_frame_rate(&enc, fps).context("capping the frame rate")?;
     let bus = pipeline.bus().ok_or_else(|| anyhow!("no bus"))?;
     if pipeline.set_state(gst::State::Playing).is_err() {
         // The real reason is on the bus: which element refused, and why.
@@ -274,7 +328,7 @@ fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(
         // to the next way (for this and the following encoders).
         loop {
             let target = targets[0].clone();
-            match try_start(&pipeline_text(screen, &target, enc, opts)) {
+            match try_start(&pipeline_text(screen, &target, enc, opts), opts.fps) {
                 Ok(r) => {
                     return Ok((r, *enc, tried, target));
                 }
@@ -443,5 +497,56 @@ pub fn list_monitors() -> Vec<crate::Monitor> {
         ]
     } else {
         vec![crate::Monitor { index: 0, name: "Whole desktop".into(), width: 0, height: 0, primary: true, gpu: String::new() }]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrameGate;
+
+    const SEC: u64 = 1_000_000_000;
+
+    /// How many of `frames` timestamps the gate lets through.
+    fn admitted(fps: u32, frames: impl Iterator<Item = u64>) -> usize {
+        let mut gate = FrameGate::new(fps);
+        frames.filter(|&pts| gate.admit(pts)).count()
+    }
+
+    #[test]
+    fn caps_a_165_hz_screen_to_60_fps() {
+        let n = admitted(60, (0..165 * 2).map(|i| i * SEC / 165));
+        assert!((118..=121).contains(&n), "{n} frames in 2 s");
+    }
+
+    #[test]
+    fn keeps_every_frame_of_a_jittery_60_hz_screen() {
+        // ±2 ms around each 16.7 ms tick.
+        let jitter = [0i64, 2_000_000, -2_000_000, 1_000_000, -1_500_000];
+        let frames = (0..120u64).map(|i| (i * SEC / 60 + 10_000_000).saturating_add_signed(jitter[i as usize % jitter.len()]));
+        assert_eq!(admitted(60, frames), 120);
+    }
+
+    #[test]
+    fn halves_a_60_hz_screen_capped_at_30() {
+        let n = admitted(30, (0..120).map(|i| i * SEC / 60));
+        assert!((59..=61).contains(&n), "{n} frames in 2 s");
+    }
+
+    #[test]
+    fn no_burst_after_a_still_screen() {
+        let mut gate = FrameGate::new(60);
+        assert!(gate.admit(0));
+        // Nothing for 5 s, then 165 Hz again: still at most ~60 in the next second.
+        let n = (0..165).map(|i| 5 * SEC + i * SEC / 165).filter(|&pts| gate.admit(pts)).count();
+        assert!((59..=61).contains(&n), "{n} frames in 1 s");
+    }
+
+    #[test]
+    fn starts_over_when_timestamps_go_back() {
+        let mut gate = FrameGate::new(60);
+        assert!(gate.admit(10 * SEC));
+        assert!(gate.admit(0));
+        assert!(!gate.admit(SEC / 165));
+        assert!(gate.admit(SEC / 60));
     }
 }

@@ -6,3 +6,4 @@ app/desktop/gen/
 test-results/
 tests/tmp/
 xtest.pids
+CLAUDE.local.md

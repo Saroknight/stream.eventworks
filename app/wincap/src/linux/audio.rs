@@ -137,7 +137,10 @@ pub fn start_audio(control: Arc<Control>, tx: SyncSender<AudioChunk>, mode: Audi
                     control.report_error(format!("audio capture restarting: {e:#}"));
                     // Per-app capture keeps failing: fall back to everything rather than silence.
                     if fails >= 3 && p != Plan::All {
-                        let _ = run(&control, &tx, &AudioMode::All, &Plan::All);
+                        match run(&control, &tx, &AudioMode::All, &Plan::All) {
+                            Ok(()) => fails = 0,
+                            Err(e) => control.report_error(format!("all-audio fallback failed: {e:#}")),
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(500));
                 }
@@ -147,18 +150,35 @@ pub fn start_audio(control: Arc<Control>, tx: SyncSender<AudioChunk>, mode: Audi
     Ok((handle, desc))
 }
 
+/// Shuts the pipeline down however `run` exits. A pipeline dropped while not in Null keeps its
+/// threads and PipeWire streams alive, so every failed start used to leak one.
+struct Stopping<'a> {
+    pipeline: gst::Pipeline,
+    control: &'a Control,
+}
+
+impl Drop for Stopping<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.pipeline.set_state(gst::State::Null) {
+            self.control.report_error(format!("stopping the audio pipeline: {e}"));
+        }
+    }
+}
+
 /// Runs one pipeline until the plan changes (apps start/stop) or we're stopped.
 fn run(control: &Control, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan) -> Result<()> {
     let pipeline = gst::parse::launch(&pipeline_text(p))
         .context("building the audio pipeline")?
         .downcast::<gst::Pipeline>()
         .map_err(|_| anyhow!("not a pipeline"))?;
+    let stopping = Stopping { pipeline, control };
+    let pipeline = &stopping.pipeline;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or_else(|| anyhow!("no sink"))?;
     pipeline.set_state(gst::State::Playing).context("starting audio")?;
     let bus = pipeline.bus();
     let mut pending: Vec<i16> = Vec::with_capacity(CHUNK * 4);
     let mut last_check = Instant::now();
-    let result = loop {
+    loop {
         if control.stop.load(Ordering::Relaxed) {
             break Ok(());
         }
@@ -182,13 +202,8 @@ fn run(control: &Control, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Pla
             control.stats.audio_chunks.fetch_add(1, Ordering::Relaxed);
             match tx.try_send(AudioChunk { samples, sample_rate: RATE, channels: CHANNELS }) {
                 Ok(()) | Err(TrySendError::Full(_)) => {}
-                Err(TrySendError::Disconnected(_)) => {
-                    let _ = pipeline.set_state(gst::State::Null);
-                    return Ok(());
-                }
+                Err(TrySendError::Disconnected(_)) => return Ok(()),
             }
         }
-    };
-    let _ = pipeline.set_state(gst::State::Null);
-    result
+    }
 }
