@@ -37,14 +37,21 @@ jobs:
     container: archlinux:base-devel
     outputs:
       version: ${{ steps.ver.outputs.version }}
+    env:
+      # Link with mold (much faster than the default linker on the big app binary). Set here
+      # rather than in app/.cargo/config.toml so local builds don't need mold installed.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - name: Build tools and libraries
         run: |
-          pacman -Syu --noconfirm --needed git nodejs npm rustup clang pkgconf openssl \
+          pacman -Syu --noconfirm --needed git nodejs npm rustup clang mold pkgconf openssl \
             webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg \
             gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly \
             gst-plugin-pipewire gst-plugin-va pipewire xdg-desktop-portal
-          rustup default stable
+          # Pinned: the Rust cache is per compiler version, so following "stable" meant a full
+          # cold build (~16 min) every six weeks. Bump this on purpose.
+          rustup default 1.99.1
 
       - uses: actions/checkout@v4
 
@@ -62,7 +69,9 @@ jobs:
 
       - name: Unit tests
         working-directory: app
-        run: cargo test -p streamroom-core -p streamroom-desktop -p wincap
+        # --release: reuses the release build's dependencies instead of compiling them all a
+        # second time in debug (most of a cold build), and keeps the cache about half the size.
+        run: cargo test --release -p streamroom-core -p streamroom-desktop -p wincap
 
       - name: Build app
         working-directory: app/desktop
