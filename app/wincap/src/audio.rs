@@ -351,7 +351,9 @@ fn activate_process_loopback(pid: u32, exclude: bool) -> Result<IAudioClient> {
                 PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
             },
         };
-        let prop = PROPVARIANT {
+        // PROPVARIANT's Drop calls PropVariantClear, which would CoTaskMemFree our stack-based
+        // blob (heap corruption, 0xc0000374). The whole thing must never be dropped.
+        let prop = std::mem::ManuallyDrop::new(PROPVARIANT {
             Anonymous: PROPVARIANT_0 {
                 Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
                     vt: VT_BLOB,
@@ -366,10 +368,10 @@ fn activate_process_loopback(pid: u32, exclude: bool) -> Result<IAudioClient> {
                     },
                 }),
             },
-        };
+        });
         let signal = Arc::new((Mutex::new(false), Condvar::new()));
         let handler: IActivateAudioInterfaceCompletionHandler = Done(signal.clone()).into();
-        let op = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, &IAudioClient::IID, Some(&prop), &handler)
+        let op = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, &IAudioClient::IID, Some(&*prop), &handler)
             .context("ActivateAudioInterfaceAsync")?;
         {
             let (lock, cv) = &*signal;
