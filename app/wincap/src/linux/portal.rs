@@ -4,7 +4,7 @@
 
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,12 +15,28 @@ use ashpd::desktop::PersistMode;
 use crate::Control;
 
 /// A running screen-share session. The portal session stays open (on its own thread) until
-/// `control.stop` is set; `fd` is the PipeWire connection GStreamer reads from.
+/// `control.stop` is set or this is dropped; `fd` is the PipeWire connection GStreamer reads from.
 pub struct PortalStream {
     pub fd: OwnedFd,
     pub node: u32,
     pub size: Option<(i32, i32)>,
+    /// A remembered choice was used (no dialog).
+    pub restored: bool,
+    stop: Arc<AtomicBool>,
     pub _thread: std::thread::JoinHandle<()>,
+}
+
+impl Drop for PortalStream {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Forget the remembered screen, so the next session asks again.
+pub fn forget() {
+    if let Some(p) = token_path() {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 fn token_path() -> Option<PathBuf> {
@@ -33,6 +49,9 @@ fn token_path() -> Option<PathBuf> {
 /// Opens a screen-share session. `remember`: reuse the last choice instead of asking. The new
 /// choice is always saved, so "Ask every time" then back to "remembered" keeps the latest pick.
 pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<PortalStream> {
+    let restored = remember && token_path().map(|p| p.exists()).unwrap_or(false);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_t = stop.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<(OwnedFd, u32, Option<(i32, i32)>)>>();
     let thread = std::thread::Builder::new().name("screen-portal".into()).spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
@@ -97,7 +116,7 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
                 }
             }
             // Keep the session open while streaming.
-            while !control.stop.load(Ordering::Relaxed) {
+            while !control.stop.load(Ordering::Relaxed) && !stop_t.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             let _ = session.close().await;
@@ -108,5 +127,5 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
         .recv_timeout(Duration::from_secs(180))
         .map_err(|_| anyhow!("no screen was chosen in time"))?
         .context("screen sharing")?;
-    Ok(PortalStream { fd, node, size, _thread: thread })
+    Ok(PortalStream { fd, node, size, restored, stop, _thread: thread })
 }

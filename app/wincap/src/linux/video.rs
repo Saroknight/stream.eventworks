@@ -146,8 +146,24 @@ fn try_start(text: &str) -> Result<Running> {
         .map_err(|_| anyhow!("not a pipeline"))?;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or_else(|| anyhow!("no sink"))?;
     let enc = pipeline.by_name("enc").ok_or_else(|| anyhow!("no encoder"))?;
-    pipeline.set_state(gst::State::Playing).context("starting the video pipeline")?;
     let bus = pipeline.bus().ok_or_else(|| anyhow!("no bus"))?;
+    if pipeline.set_state(gst::State::Playing).is_err() {
+        // The real reason is on the bus: which element refused, and why.
+        let why = bus
+            .timed_pop_filtered(gst::ClockTime::from_seconds(1), &[gst::MessageType::Error])
+            .and_then(|m| match m.view() {
+                gst::MessageView::Error(e) => Some(format!(
+                    "{}: {} ({})",
+                    e.src().map(|s| s.path_string().to_string()).unwrap_or_default(),
+                    e.error(),
+                    e.debug().map(|d| d.to_string()).unwrap_or_default()
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| "an element refused to start (no details)".into());
+        let _ = pipeline.set_state(gst::State::Null);
+        bail!("starting the video pipeline: {why}");
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
@@ -166,6 +182,21 @@ fn try_start(text: &str) -> Result<Running> {
     }
 }
 
+/// Tries each available encoder in order; the first that produces video wins.
+fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(Running, Enc, Vec<String>), Vec<String>> {
+    let mut tried = Vec::new();
+    for enc in ENCODERS.iter().filter(|e| available(e.element)) {
+        if enc.va && !available("vapostproc") {
+            continue;
+        }
+        match try_start(&pipeline_text(screen, enc, opts)) {
+            Ok(r) => return Ok((r, *enc, tried)),
+            Err(e) => tried.push(format!("{}: {e:#}", enc.element)),
+        }
+    }
+    Err(tried)
+}
+
 pub fn start_video(
     opts: VideoOptions,
     control: Arc<Control>,
@@ -173,36 +204,41 @@ pub fn start_video(
 ) -> Result<(VideoInfo, std::thread::JoinHandle<()>)> {
     gst::init().context("GStreamer")?;
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    let screen = if wayland || std::env::var_os("DISPLAY").is_none() {
-        if !available("pipewiresrc") {
-            bail!("GStreamer's PipeWire plugin is missing (install gst-plugin-pipewire)");
-        }
-        Screen::Portal(portal::open(control.clone(), opts.cursor, opts.monitor != ASK_EVERY_TIME)?)
-    } else {
-        Screen::X11 { cursor: opts.cursor }
+    let use_portal = wayland || std::env::var_os("DISPLAY").is_none();
+    if use_portal && !available("pipewiresrc") {
+        bail!("GStreamer's PipeWire plugin is missing (install gst-plugin-pipewire)");
+    }
+    let open_screen = |remember: bool| -> Result<Screen> {
+        Ok(if use_portal {
+            Screen::Portal(portal::open(control.clone(), opts.cursor, remember)?)
+        } else {
+            Screen::X11 { cursor: opts.cursor }
+        })
     };
 
-    // First encoder that actually produces video wins.
-    let mut tried = Vec::new();
-    let mut started = None;
-    for enc in ENCODERS.iter().filter(|e| available(e.element)) {
-        if enc.va && !available("vapostproc") {
-            continue;
-        }
-        match try_start(&pipeline_text(&screen, enc, &opts)) {
-            Ok(r) => {
-                started = Some((r, *enc));
-                break;
-            }
-            Err(e) => tried.push(format!("{}: {e:#}", enc.element)),
-        }
+    let mut screen = open_screen(opts.monitor != ASK_EVERY_TIME)?;
+    let mut result = start_encoders(&screen, &opts);
+    // A remembered screen choice can go stale (the desktop restores a session we can't read):
+    // forget it and ask once more before giving up.
+    if result.is_err() && matches!(&screen, Screen::Portal(p) if p.restored) {
+        let first = result.err().unwrap_or_default();
+        drop(screen); // closes that portal session
+        portal::forget();
+        screen = open_screen(false)?;
+        result = start_encoders(&screen, &opts).map_err(|mut t| {
+            t.insert(0, format!("with the remembered screen: {}", first.join("; ")));
+            t
+        });
     }
-    let Some((run, enc)) = started else {
-        control.stop.store(true, Ordering::Relaxed); // closes the portal session
-        if tried.is_empty() {
-            bail!("no H.264 encoder found. Install gst-plugins-bad (VA-API) or gst-plugins-ugly (x264)");
+    let (run, enc, tried) = match result {
+        Ok(r) => r,
+        Err(tried) => {
+            drop(screen);
+            if tried.is_empty() {
+                bail!("no H.264 encoder found. Install gst-plugin-va (AMD/Intel) or gst-plugins-ugly (x264)");
+            }
+            bail!("couldn't start video with any encoder:\n{}", tried.join("\n"));
         }
-        bail!("couldn't start video with any encoder:\n{}", tried.join("\n"));
     };
 
     let out = run.first.caps().and_then(caps_size).unwrap_or((0, 0));
