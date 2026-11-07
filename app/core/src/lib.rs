@@ -416,8 +416,11 @@ pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
     control.stop.store(true, Ordering::Relaxed);
     drop(rx);
     let _ = thread.join();
+    let st = &control.stats;
+    let (captured, submitted) = (st.captured.load(Ordering::Relaxed), st.submitted.load(Ordering::Relaxed));
     Ok(format!(
-        "Capture:  {} {}x{} -> {}x{} @ {} fps\nEncoder:  {}\nResult:   {frames} frames ({keys} keyframes, {:.1} Mbps) in {seconds} s{}",
+        "Capture:  {} {}x{} -> {}x{} @ {} fps\nEncoder:  {}\nResult:   {frames} frames ({keys} keyframes, {:.1} Mbps) in {seconds} s\n\
+         Screen:   {captured} frames captured, {submitted} sent to the encoder (the rest were over the fps cap){}",
         info.capture_method,
         info.source_width,
         info.source_height,

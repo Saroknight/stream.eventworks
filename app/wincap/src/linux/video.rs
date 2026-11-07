@@ -6,7 +6,7 @@
 //! Output: Annex B access units, same as the Windows encoder, for the same publishing path.
 
 use std::os::fd::AsRawFd;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -273,15 +273,30 @@ impl FrameGate {
     }
 }
 
-/// Drops raw frames that arrive sooner than `fps` allows, at the encoder's input.
-fn cap_frame_rate(enc: &gst::Element, fps: u32) -> Result<()> {
+/// Counts the frames leaving `element` into one of the `Stats` counters.
+fn count_frames(element: &gst::Element, control: &Arc<Control>, counter: fn(&crate::Stats) -> &AtomicU64) -> Result<()> {
+    let pad = element.static_pad("src").ok_or_else(|| anyhow!("{} has no output", element.name()))?;
+    let control = control.clone();
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+        counter(&control.stats).fetch_add(1, Ordering::Relaxed);
+        gst::PadProbeReturn::Ok
+    })
+    .ok_or_else(|| anyhow!("couldn't watch {}", element.name()))?;
+    Ok(())
+}
+
+/// Drops raw frames that arrive sooner than `fps` allows, at the encoder's input, and counts
+/// the ones it lets through.
+fn cap_frame_rate(enc: &gst::Element, fps: u32, control: &Arc<Control>) -> Result<()> {
     let pad = enc.static_pad("sink").ok_or_else(|| anyhow!("the encoder has no input"))?;
     let gate = Mutex::new(FrameGate::new(fps));
+    let control = control.clone();
     pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
         let Some(pts) = info.buffer().and_then(|b| b.pts()) else { return gst::PadProbeReturn::Ok };
         // A poisoned lock only means an earlier call panicked; the gate's state is still usable.
         let mut gate = gate.lock().unwrap_or_else(PoisonError::into_inner);
         if gate.admit(pts.nseconds()) {
+            control.stats.submitted.fetch_add(1, Ordering::Relaxed);
             gst::PadProbeReturn::Ok
         } else {
             gst::PadProbeReturn::Drop
@@ -296,7 +311,10 @@ fn cap_frame_rate(enc: &gst::Element, fps: u32) -> Result<()> {
 fn try_start(text: &str, fps: u32, control: &Arc<Control>) -> Result<Running> {
     let (pipeline, sink) = launch(text, "video", control)?;
     let enc = pipeline.by_name("enc").ok_or_else(|| anyhow!("the video pipeline has no encoder"))?;
-    cap_frame_rate(&enc, fps).context("capping the frame rate")?;
+    cap_frame_rate(&enc, fps, control).context("capping the frame rate")?;
+    // Every frame the screen sends, before the frame-rate cap: "fps captured" in the app.
+    let src = pipeline.by_name("src").ok_or_else(|| anyhow!("the video pipeline has no screen source"))?;
+    count_frames(&src, control, |s| &s.captured).context("counting captured frames")?;
     let bus = pipeline.bus().ok_or_else(|| anyhow!("the video pipeline has no message bus"))?;
     if pipeline.set_state(gst::State::Playing).is_err() {
         // The real reason is on the bus: which element refused, and why.
@@ -540,8 +558,6 @@ fn send(sample: &gst::Sample, control: &Control, tx: &SyncSender<EncodedFrame>, 
     let keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
     let (width, height) = sample.caps().and_then(caps_size).unwrap_or(out);
     let s = &control.stats;
-    s.captured.fetch_add(1, Ordering::Relaxed);
-    s.submitted.fetch_add(1, Ordering::Relaxed);
     s.encoded.fetch_add(1, Ordering::Relaxed);
     s.bytes.fetch_add(map.len() as u64, Ordering::Relaxed);
     if keyframe {
