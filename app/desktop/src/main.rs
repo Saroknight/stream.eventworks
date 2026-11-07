@@ -13,7 +13,7 @@
 mod account;
 mod update;
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -500,18 +500,24 @@ fn open_logs() {
     }
 }
 
+/// Looks for a newer release, keeps what it found and tells the window (which shows or hides
+/// the "Version X is ready" banner).
+async fn refresh_update(app: &AppHandle) -> anyhow::Result<Option<update::Available>> {
+    let found = update::check().await?;
+    *app.state::<AppState>().update.lock().unwrap_or_else(PoisonError::into_inner) = found.clone();
+    if let Err(e) = app.emit("update", found.clone()) {
+        log::info(&format!("couldn't tell the window about the update check: {e}"));
+    }
+    Ok(found)
+}
+
+/// "Check for updates" in the menu: a newer version, or `None` when this is the latest.
 #[tauri::command]
-async fn check_update(app: AppHandle) -> Option<update::Available> {
-    let found = match update::check().await {
-        Ok(a) => a,
-        Err(e) => {
-            log::info(&format!("update check failed: {e:#}"));
-            None
-        }
-    };
-    *app.state::<AppState>().update.lock().unwrap() = found.clone();
-    let _ = app.emit("update", found.clone());
-    found
+async fn check_update(app: AppHandle) -> Result<Option<update::Available>, String> {
+    refresh_update(&app).await.map_err(|e| {
+        log::info(&format!("update check failed: {e:#}"));
+        "Couldn't check for updates. Check the internet connection and try again.".to_string()
+    })
 }
 
 #[tauri::command]
@@ -673,7 +679,9 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 loop {
-                    let _ = check_update(h.clone()).await;
+                    if let Err(e) = refresh_update(&h).await {
+                        log::info(&format!("update check failed: {e:#}"));
+                    }
                     tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
                 }
             });
