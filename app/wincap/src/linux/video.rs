@@ -23,35 +23,99 @@ use crate::{Control, EncodedFrame, VideoInfo, VideoOptions};
 /// Monitor index 1 on Linux = ask which screen or window every time.
 pub const ASK_EVERY_TIME: u32 = 1;
 
-#[derive(Clone, Copy, Debug)]
-struct Enc {
-    element: &'static str,
-    label: &'static str,
-    /// Runs on the GPU and wants VA surfaces from vapostproc.
-    va: bool,
+/// The H.264 encoders we know how to drive, best first in `Encoder::ALL`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Encoder {
+    VaH264,
+    VaH264LowPower,
+    /// The older gstreamer-vaapi plugin.
+    Vaapi,
+    Nvenc,
+    X264,
+    OpenH264,
 }
 
-const ENCODERS: &[Enc] = &[
-    Enc { element: "vah264enc", label: "VA-API H.264 (graphics card)", va: true },
-    Enc { element: "vah264lpenc", label: "VA-API H.264 low power (graphics card)", va: true },
-    Enc { element: "vaapih264enc", label: "VA-API H.264 (graphics card, legacy plugin)", va: false },
-    Enc { element: "nvh264enc", label: "NVIDIA NVENC H.264 (graphics card)", va: false },
-    Enc { element: "x264enc", label: "x264 (processor)", va: false },
-    Enc { element: "openh264enc", label: "OpenH264 (processor)", va: false },
-];
+impl Encoder {
+    const ALL: [Encoder; 6] = [Self::VaH264, Self::VaH264LowPower, Self::Vaapi, Self::Nvenc, Self::X264, Self::OpenH264];
 
-fn encoder_settings(e: &Enc, kbps: u32, gop: u32) -> String {
-    match e.element {
-        "vah264enc" | "vah264lpenc" => format!("rate-control=cbr bitrate={kbps} key-int-max={gop} b-frames=0 target-usage=7"),
-        "vaapih264enc" => format!("rate-control=cbr bitrate={kbps} keyframe-period={gop} max-bframes=0 tune=low-power"),
-        "nvh264enc" => format!("rc-mode=cbr bitrate={kbps} gop-size={gop} bframes=0 zerolatency=true preset=low-latency-hq"),
-        "x264enc" => format!("tune=zerolatency speed-preset=veryfast bitrate={kbps} key-int-max={gop} bframes=0 vbv-buf-capacity=500"),
-        _ => format!("bitrate={} gop-size={gop} rate-control=bitrate", kbps * 1000),
+    fn element(self) -> &'static str {
+        match self {
+            Self::VaH264 => "vah264enc",
+            Self::VaH264LowPower => "vah264lpenc",
+            Self::Vaapi => "vaapih264enc",
+            Self::Nvenc => "nvh264enc",
+            Self::X264 => "x264enc",
+            Self::OpenH264 => "openh264enc",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::VaH264 => "VA-API H.264 (graphics card)",
+            Self::VaH264LowPower => "VA-API H.264 low power (graphics card)",
+            Self::Vaapi => "VA-API H.264 (graphics card, legacy plugin)",
+            Self::Nvenc => "NVIDIA NVENC H.264 (graphics card)",
+            Self::X264 => "x264 (processor)",
+            Self::OpenH264 => "OpenH264 (processor)",
+        }
+    }
+
+    fn on_gpu(self) -> bool {
+        match self {
+            Self::VaH264 | Self::VaH264LowPower | Self::Vaapi | Self::Nvenc => true,
+            Self::X264 | Self::OpenH264 => false,
+        }
+    }
+
+    /// Runs on VA surfaces, which `vapostproc` makes.
+    fn wants_va_surfaces(self) -> bool {
+        match self {
+            Self::VaH264 | Self::VaH264LowPower => true,
+            Self::Vaapi | Self::Nvenc | Self::X264 | Self::OpenH264 => false,
+        }
+    }
+
+    /// The encoder and everything its part of the pipeline needs are installed.
+    fn available(self) -> bool {
+        available(self.element()) && (!self.wants_va_surfaces() || available("vapostproc"))
+    }
+
+    /// Constant bitrate, no B-frames, a keyframe at least every `gop` frames, low latency.
+    fn settings(self, kbps: u32, gop: u32) -> String {
+        match self {
+            Self::VaH264 | Self::VaH264LowPower => format!("rate-control=cbr bitrate={kbps} key-int-max={gop} b-frames=0 target-usage=7"),
+            Self::Vaapi => format!("rate-control=cbr bitrate={kbps} keyframe-period={gop} max-bframes=0 tune=low-power"),
+            Self::Nvenc => format!("rc-mode=cbr bitrate={kbps} gop-size={gop} bframes=0 zerolatency=true preset=low-latency-hq"),
+            Self::X264 => format!("tune=zerolatency speed-preset=veryfast bitrate={kbps} key-int-max={gop} bframes=0 vbv-buf-capacity=500"),
+            Self::OpenH264 => format!("bitrate={} gop-size={gop} rate-control=bitrate", self.bitrate_value(kbps * 1000)),
+        }
+    }
+
+    /// The encoder's `bitrate` property for `bps` bits per second.
+    fn bitrate_value(self, bps: u32) -> u32 {
+        match self {
+            Self::OpenH264 => bps,
+            Self::VaH264 | Self::VaH264LowPower | Self::Vaapi | Self::Nvenc | Self::X264 => bps / 1000,
+        }
+    }
+
+    /// Scales the frames to `size` (caps fields) in the format the encoder takes.
+    fn convert(self, size: &str) -> String {
+        match self {
+            Self::VaH264 | Self::VaH264LowPower => format!("vapostproc ! video/x-raw(memory:VAMemory),format=NV12{size}"),
+            Self::Vaapi | Self::Nvenc => format!("videoconvert ! videoscale ! video/x-raw,format=NV12{size}"),
+            Self::X264 | Self::OpenH264 => format!("videoconvert ! videoscale ! video/x-raw,format=I420{size}"),
+        }
     }
 }
 
 fn available(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
+}
+
+/// Wayland, or no X display either: the screen comes from the desktop's screen-share portal.
+fn use_portal() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_none()
 }
 
 /// Sets square pixels on the screen's frames (see `Screen::source`).
@@ -117,7 +181,7 @@ impl Screen {
     }
 }
 
-fn pipeline_text(screen: &Screen, target: &str, enc: &Enc, opts: &VideoOptions) -> String {
+fn pipeline_text(screen: &Screen, target: &str, enc: Encoder, opts: &VideoOptions) -> String {
     let fps = opts.fps.max(1);
     let kbps = (opts.bitrate_bps / 1000).max(500);
     // Output size: when the screen's shape is known, spell out width and height (even numbers,
@@ -131,24 +195,19 @@ fn pipeline_text(screen: &Screen, target: &str, enc: &Enc, opts: &VideoOptions) 
         }
         (h, None) => format!(",height={h},pixel-aspect-ratio=1/1"),
     };
-    let convert = if enc.va {
-        format!("vapostproc ! video/x-raw(memory:VAMemory),format=NV12{size}")
-    } else {
-        let fmt = if enc.element == "x264enc" || enc.element == "openh264enc" { "I420" } else { "NV12" };
-        format!("videoconvert ! videoscale ! video/x-raw,format={fmt}{size}")
-    };
     format!(
         // The frame rate is capped by `FrameGate` at the encoder's input, not here: PipeWire
         // screens have a variable rate (0/1), so max-rate alone lets everything through, and a
         // fixed framerate in the caps makes GNOME's screen stream fail to negotiate.
         "{src} ! queue max-size-buffers=2 leaky=downstream ! videorate drop-only=true max-rate={fps} ! \
          {convert} ! \
-         {enc} name=enc {settings} ! h264parse config-interval=-1 ! \
+         {element} name=enc {settings} ! h264parse config-interval=-1 ! \
          video/x-h264,stream-format=byte-stream,alignment=au ! \
          appsink name=sink sync=false max-buffers=4 drop=true",
         src = screen.source(target),
-        enc = enc.element,
-        settings = encoder_settings(enc, kbps, fps * 2),
+        convert = enc.convert(&size),
+        element = enc.element(),
+        settings = enc.settings(kbps, fps * 2),
     )
 }
 
@@ -161,11 +220,22 @@ fn caps_size(caps: &gst::CapsRef) -> Option<(u32, u32)> {
     Some((s.get::<i32>("width").ok()? as u32, s.get::<i32>("height").ok()? as u32))
 }
 
+/// A pipeline that has produced its first encoded frame.
 struct Running {
     pipeline: Pipeline,
     sink: gst_app::AppSink,
     enc: gst::Element,
     first: gst::Sample,
+}
+
+/// What `start_encoders` settled on.
+struct Started {
+    run: Running,
+    encoder: Encoder,
+    /// The pipeline's target for the screen stream ("" = none).
+    target: String,
+    /// What failed before this worked.
+    tried: Vec<String>,
 }
 
 /// Lets frames through at no more than the chosen rate, by their timestamps. Screens can send
@@ -301,31 +371,24 @@ fn visible_nodes(p: &portal::PortalStream) -> String {
     }
 }
 
-/// Tries each available encoder in order; the first that produces video wins.
-fn start_encoders(
-    screen: &Screen,
-    opts: &VideoOptions,
-    control: &Arc<Control>,
-) -> std::result::Result<(Running, Enc, Vec<String>, String), Vec<String>> {
+/// Tries each available encoder in order; the first that produces video wins. On failure,
+/// what was tried and why each failed.
+fn start_encoders(screen: &Screen, opts: &VideoOptions, control: &Arc<Control>) -> std::result::Result<Started, Vec<String>> {
     let mut tried = Vec::new();
-    let mut targets = screen.targets();
-    for enc in ENCODERS.iter().filter(|e| available(e.element)) {
-        if enc.va && !available("vapostproc") {
-            continue;
-        }
+    let targets = screen.targets();
+    let mut t = 0;
+    for encoder in Encoder::ALL.into_iter().filter(|e| e.available()) {
         // "target not found" means this PipeWire wants the stream named another way: move on
         // to the next way (for this and the following encoders).
-        loop {
-            let target = targets[0].clone();
-            match try_start(&pipeline_text(screen, &target, enc, opts), opts.fps, control) {
-                Ok(r) => {
-                    return Ok((r, *enc, tried, target));
-                }
+        // `targets` always ends with "no target", and `t` only moves on while there's another.
+        while let Some(target) = targets.get(t) {
+            match try_start(&pipeline_text(screen, target, encoder, opts), opts.fps, control) {
+                Ok(run) => return Ok(Started { run, encoder, target: target.clone(), tried }),
                 Err(e) => {
-                    let label = if target.is_empty() { "no target".to_string() } else { target.clone() };
-                    tried.push(format!("{} [{label}]: {e:#}", enc.element));
-                    if is_target_not_found(&e) && targets.len() > 1 {
-                        targets.remove(0);
+                    let label = if target.is_empty() { "no target" } else { target };
+                    tried.push(format!("{} [{label}]: {e:#}", encoder.element()));
+                    if is_target_not_found(&e) && t + 1 < targets.len() {
+                        t += 1;
                         continue;
                     }
                     break;
@@ -336,69 +399,65 @@ fn start_encoders(
     Err(tried)
 }
 
-pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<EncodedFrame>) -> Result<(VideoInfo, std::thread::JoinHandle<()>)> {
-    gst::init().context("GStreamer")?;
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    let use_portal = wayland || std::env::var_os("DISPLAY").is_none();
-    if use_portal && !available("pipewiresrc") {
-        bail!("GStreamer's PipeWire plugin is missing (install gst-plugin-pipewire)");
+fn open_screen(control: &Arc<Control>, opts: &VideoOptions, remember: bool) -> Result<Screen> {
+    if !use_portal() {
+        return Ok(Screen::X11 { cursor: opts.cursor });
     }
-    let open_screen = |remember: bool| -> Result<Screen> {
-        Ok(if use_portal {
-            let mut p = portal::open(control.clone(), opts.cursor, remember)?;
-            if p.serial.is_none() {
-                p.serial = lookup_serial(&p);
-            }
-            Screen::Portal(p)
-        } else {
-            Screen::X11 { cursor: opts.cursor }
-        })
-    };
-
-    let mut screen = open_screen(opts.monitor != ASK_EVERY_TIME)?;
-    let mut result = start_encoders(&screen, &opts, &control);
-    // A remembered screen choice can go stale (the desktop restores a session we can't read):
-    // forget it and ask once more before giving up.
-    if result.is_err() && matches!(&screen, Screen::Portal(p) if p.restored) {
-        let first = result.err().unwrap_or_default();
-        drop(screen); // closes that portal session
-        if let Err(e) = portal::forget() {
-            control.report_error(format!("couldn't forget the remembered screen: {e:#}"));
-        }
-        screen = open_screen(false)?;
-        result = start_encoders(&screen, &opts, &control).map_err(|mut t| {
-            t.insert(0, format!("with the remembered screen: {}", first.join("; ")));
-            t
-        });
+    let mut p = portal::open(control.clone(), opts.cursor, remember)?;
+    if p.serial.is_none() {
+        p.serial = lookup_serial(&p);
     }
-    let (run, enc, tried, target) = match result {
-        Ok(r) => r,
-        Err(tried) => {
-            // What the desktop handed over, for troubleshooting.
-            let detail = match &screen {
-                Screen::Portal(p) => {
-                    let fd = p.fd.as_raw_fd();
-                    let open = std::fs::read_link(format!("/proc/self/fd/{fd}"))
-                        .map(|l| l.display().to_string())
-                        .unwrap_or_else(|e| format!("not open: {e}"));
-                    format!(
-                        "\n(portal stream: node {}, serial {:?}, size {:?}, fd {fd} = {open})\n(visible on that connection: {})",
-                        p.node,
-                        p.serial,
-                        p.size,
-                        visible_nodes(p)
-                    )
-                }
-                Screen::X11 { .. } => String::new(),
-            };
-            drop(screen);
-            if tried.is_empty() {
-                bail!("no H.264 encoder found. Install gst-plugin-va (AMD/Intel) or gst-plugins-ugly (x264)");
-            }
-            bail!("couldn't start video with any encoder:\n{}{detail}", tried.join("\n"));
-        }
-    };
+    Ok(Screen::Portal(p))
+}
 
+/// What the desktop handed over, for troubleshooting a failed start.
+fn failure_detail(screen: &Screen) -> String {
+    match screen {
+        Screen::Portal(p) => {
+            let fd = p.fd.as_raw_fd();
+            let open =
+                std::fs::read_link(format!("/proc/self/fd/{fd}")).map(|l| l.display().to_string()).unwrap_or_else(|e| format!("not open: {e}"));
+            format!(
+                "\n(portal stream: node {}, serial {:?}, size {:?}, fd {fd} = {open})\n(visible on that connection: {})",
+                p.node,
+                p.serial,
+                p.size,
+                visible_nodes(p)
+            )
+        }
+        Screen::X11 { .. } => String::new(),
+    }
+}
+
+/// Opens the screen and starts the first encoder that works. A remembered screen choice can go
+/// stale (the desktop restores a session we can't read): then it's forgotten and the desktop
+/// asks once more before giving up.
+fn start_screen(opts: &VideoOptions, control: &Arc<Control>) -> Result<(Screen, Started)> {
+    let mut screen = open_screen(control, opts, opts.monitor != ASK_EVERY_TIME)?;
+    let mut result = start_encoders(&screen, opts, control);
+    if let Err(first) = &result {
+        if matches!(&screen, Screen::Portal(p) if p.restored) {
+            let first = first.join("; ");
+            drop(screen); // closes that portal session
+            if let Err(e) = portal::forget() {
+                control.report_error(format!("couldn't forget the remembered screen: {e:#}"));
+            }
+            screen = open_screen(control, opts, false)?;
+            result = start_encoders(&screen, opts, control).map_err(|mut t| {
+                t.insert(0, format!("with the remembered screen: {first}"));
+                t
+            });
+        }
+    }
+    match result {
+        Ok(started) => Ok((screen, started)),
+        Err(tried) if tried.is_empty() => bail!("no H.264 encoder found. Install gst-plugin-va (AMD/Intel) or gst-plugins-ugly (x264)"),
+        Err(tried) => bail!("couldn't start video with any encoder:\n{}{}", tried.join("\n"), failure_detail(&screen)),
+    }
+}
+
+fn video_info(screen: &Screen, started: &Started, fps: u32) -> VideoInfo {
+    let run = &started.run;
     let out = run.first.caps().and_then(caps_size).unwrap_or((0, 0));
     let src = run
         .pipeline
@@ -406,83 +465,103 @@ pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<Enc
         .and_then(|s| s.static_pad("src"))
         .and_then(|p| p.current_caps())
         .and_then(|c| caps_size(&c))
-        .or(match &screen {
-            Screen::Portal(p) => p.size.map(|(w, h)| (w as u32, h as u32)),
-            _ => None,
-        })
+        .or_else(|| screen.size())
         .unwrap_or(out);
-    let info = VideoInfo {
-        adapter: if enc.label.contains("graphics card") { "graphics card".into() } else { "processor".into() },
-        encoder: enc.label.into(),
+    let target = &started.target;
+    VideoInfo {
+        adapter: if started.encoder.on_gpu() { "graphics card".into() } else { "processor".into() },
+        encoder: started.encoder.label().into(),
         capture_method: if target.is_empty() { screen.method().into() } else { format!("{} ({target})", screen.method()) },
         source_width: src.0,
         source_height: src.1,
         width: out.0,
         height: out.1,
-        fps: opts.fps,
-        unsupported_settings: tried,
-    };
+        fps,
+        unsupported_settings: started.tried.clone(),
+    }
+}
 
+pub fn start_video(opts: VideoOptions, control: Arc<Control>, tx: SyncSender<EncodedFrame>) -> Result<(VideoInfo, std::thread::JoinHandle<()>)> {
+    gst::init().context("GStreamer")?;
+    if use_portal() && !available("pipewiresrc") {
+        bail!("GStreamer's PipeWire plugin is missing (install gst-plugin-pipewire)");
+    }
+    let (screen, started) = start_screen(&opts, &control)?;
+    let info = video_info(&screen, &started, opts.fps);
+    let out = (info.width, info.height);
     let handle = std::thread::Builder::new().name("video".into()).spawn(move || {
-        let Running { pipeline, sink, enc: enc_el, first } = run;
-        let bus = pipeline.bus();
-        let mut next = Some(first);
-        while !control.stop.load(Ordering::Relaxed) {
-            if let Some(msg) = bus.as_ref().and_then(|b| b.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])) {
-                let why = match PipelineError::from_message(&msg) {
-                    Some(e) => format!("video stopped: {}", e.message),
-                    None => "video stopped: the screen share ended".into(),
-                };
-                control.report_error(why);
-                control.stop.store(true, Ordering::Relaxed);
-                break;
-            }
-            if control.keyframe_requested.swap(false, Ordering::Relaxed) {
-                let ev = gstreamer_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
-                sink.send_event(ev);
-            }
-            let bps = control.bitrate_request.swap(0, Ordering::Relaxed);
-            if bps > 0 && enc_el.has_property("bitrate") {
-                let v = if enc.element == "openh264enc" { bps } else { bps / 1000 };
-                enc_el.set_property_from_str("bitrate", &v.to_string());
-            }
-            let Some(sample) = next.take().or_else(|| sink.try_pull_sample(gst::ClockTime::from_mseconds(50))) else {
-                continue;
-            };
-            let Some(buf) = sample.buffer() else { continue };
-            let Ok(map) = buf.map_readable() else { continue };
-            let keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
-            let (width, height) = sample.caps().and_then(caps_size).unwrap_or(out);
-            let s = &control.stats;
-            s.captured.fetch_add(1, Ordering::Relaxed);
-            s.submitted.fetch_add(1, Ordering::Relaxed);
-            s.encoded.fetch_add(1, Ordering::Relaxed);
-            s.bytes.fetch_add(map.len() as u64, Ordering::Relaxed);
-            if keyframe {
-                s.keyframes.fetch_add(1, Ordering::Relaxed);
-            }
-            let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us: now_us(), encode_latency_us: 0 };
-            match tx.try_send(frame) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    s.dropped.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Disconnected(_)) => break,
-            }
-        }
-        // The screen share (portal fd) stays open until here; stop the pipeline reading it first.
-        drop(pipeline);
+        stream(started.run, started.encoder, &control, &tx, out);
+        // The screen share (portal fd) stays open until here, after `stream` has stopped and
+        // dropped the pipeline reading it.
         drop(screen);
         control.stop.store(true, Ordering::Relaxed);
     })?;
     Ok((info, handle))
 }
 
-/// Linux monitors: Wayland lets the desktop's dialog pick the screen, so the choice here is
+/// Hands encoded frames to `tx` until stopped, the screen share ends, or nobody is receiving.
+fn stream(run: Running, encoder: Encoder, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) {
+    let Running { pipeline, sink, enc, first } = run;
+    let bus = pipeline.bus();
+    let mut next = Some(first);
+    while !control.stop.load(Ordering::Relaxed) {
+        if let Some(msg) = bus.as_ref().and_then(|b| b.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])) {
+            let why = match PipelineError::from_message(&msg) {
+                Some(e) => format!("video stopped: {}", e.message),
+                None => "video stopped: the screen share ended".into(),
+            };
+            control.report_error(why);
+            return;
+        }
+        apply_requests(control, &sink, &enc, encoder);
+        let Some(sample) = next.take().or_else(|| sink.try_pull_sample(gst::ClockTime::from_mseconds(50))) else { continue };
+        if !send(&sample, control, tx, out) {
+            return;
+        }
+    }
+}
+
+/// Keyframe and bitrate requests from the network side.
+fn apply_requests(control: &Control, sink: &gst_app::AppSink, enc: &gst::Element, encoder: Encoder) {
+    if control.keyframe_requested.swap(false, Ordering::Relaxed) {
+        let ev = gstreamer_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
+        sink.send_event(ev);
+    }
+    let bps = control.bitrate_request.swap(0, Ordering::Relaxed);
+    if bps > 0 && enc.has_property("bitrate") {
+        enc.set_property_from_str("bitrate", &encoder.bitrate_value(bps).to_string());
+    }
+}
+
+/// Sends one encoded frame on. Returns false once nobody is receiving.
+fn send(sample: &gst::Sample, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> bool {
+    let Some(buf) = sample.buffer() else { return true };
+    let Ok(map) = buf.map_readable() else { return true };
+    let keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
+    let (width, height) = sample.caps().and_then(caps_size).unwrap_or(out);
+    let s = &control.stats;
+    s.captured.fetch_add(1, Ordering::Relaxed);
+    s.submitted.fetch_add(1, Ordering::Relaxed);
+    s.encoded.fetch_add(1, Ordering::Relaxed);
+    s.bytes.fetch_add(map.len() as u64, Ordering::Relaxed);
+    if keyframe {
+        s.keyframes.fetch_add(1, Ordering::Relaxed);
+    }
+    let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us: now_us(), encode_latency_us: 0 };
+    match tx.try_send(frame) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) => {
+            s.dropped.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(TrySendError::Disconnected(_)) => false,
+    }
+}
+
+/// Linux monitors: on the portal the desktop's dialog picks the screen, so the choice here is
 /// whether to remember it.
 pub fn list_monitors() -> Vec<crate::Monitor> {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    if wayland {
+    if use_portal() {
         vec![
             crate::Monitor { index: 0, name: "Screen you picked (remembered)".into(), width: 0, height: 0, primary: true, gpu: String::new() },
             crate::Monitor { index: ASK_EVERY_TIME, name: "Ask every time".into(), width: 0, height: 0, primary: false, gpu: String::new() },
@@ -494,7 +573,18 @@ pub fn list_monitors() -> Vec<crate::Monitor> {
 
 #[cfg(test)]
 mod tests {
-    use super::FrameGate;
+    use super::{Encoder, FrameGate};
+
+    #[test]
+    fn bitrate_units_match_each_encoder() {
+        // OpenH264 takes bits per second, the others kilobits.
+        assert!(Encoder::OpenH264.settings(8000, 120).starts_with("bitrate=8000000 "));
+        assert_eq!(Encoder::OpenH264.bitrate_value(8_000_000), 8_000_000);
+        for e in [Encoder::VaH264, Encoder::VaH264LowPower, Encoder::Vaapi, Encoder::Nvenc, Encoder::X264] {
+            assert!(e.settings(8000, 120).contains("bitrate=8000 "), "{e:?}");
+            assert_eq!(e.bitrate_value(8_000_000), 8000, "{e:?}");
+        }
+    }
 
     const SEC: u64 = 1_000_000_000;
 
