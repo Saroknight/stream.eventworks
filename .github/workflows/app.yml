@@ -4,7 +4,7 @@ name: Windows and Linux app
 # package); download them from the run's artifacts. On main, if app/Cargo.toml has a version
 # with no release yet, both are published as GitHub Release app-v<version>: that's what the
 # site's /download page and the app's auto-updater use. So to release: bump the version and
-# push to main.
+# push to main. Each platform is published as soon as its build finishes (app-publish.yml).
 
 on:
   push:
@@ -120,54 +120,22 @@ jobs:
           path: app/dist/
           retention-days: 30
 
-  publish:
-    needs: [windows, linux]
+  # Each platform is published as soon as it's built (Linux is much quicker), into the same
+  # release app-v<version>; SHA256SUMS is merged so both updaters can verify their file.
+  publish-linux:
+    needs: linux
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/app-publish.yml
+    with:
+      artifact: streamroom-live-linux
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Should this build be released?
-        id: rel
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VER=$(grep -m1 '^version' app/Cargo.toml | cut -d'"' -f2)
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          if gh release view "app-v$VER" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"; echo "app-v$VER already released"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "publishing app-v$VER"
-          fi
-
-      - uses: actions/download-artifact@v4
-        if: steps.rel.outputs.publish == 'true'
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Publish release
-        if: steps.rel.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          VER="${{ steps.rel.outputs.version }}"
-          cd dist
-          rm -f SHA256SUMS
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
-          cat > ../notes.md <<EOF
-          **Windows:** download **Streamroom-Live-Setup.exe** below and run it. Windows may say it protected your PC: click **More info**, then **Run anyway**.
-
-          **Arch Linux / CachyOS:**
-          \`\`\`
-          curl -LO https://github.com/$REPO/releases/latest/download/streamroom-live-x86_64.pkg.tar.zst && sudo pacman -U streamroom-live-x86_64.pkg.tar.zst
-          \`\`\`
-
-          Installed copies update themselves.
-          EOF
-          gh release create "app-v$VER" --repo "$REPO" --target "${{ github.sha }}" * \
-            --title "Streamroom Live $VER" --latest --notes-file ../notes.md
+  publish-windows:
+    needs: windows
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/app-publish.yml
+    with:
+      artifact: streamroom-live-windows
+    permissions:
+      contents: write

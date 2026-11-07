@@ -11,14 +11,17 @@ let cache = { at: 0, value: null };
 async function latest() {
   if (cache.value && Date.now() - cache.at < CACHE_MS) return cache.value;
   try {
-    const r = await fetch(`https://api.github.com/repos/${APP_RELEASES_REPO}/releases/latest`, {
+    // The newest release that has the Windows installer (Linux is published first, so for a few
+    // minutes the very latest release may not have it yet).
+    const r = await fetch(`https://api.github.com/repos/${APP_RELEASES_REPO}/releases?per_page=10`, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'streamroom-server' },
       signal: AbortSignal.timeout(5000),
     });
     if (r.status === 404) {
       cache = { at: Date.now(), value: { version: null } };
     } else if (r.ok) {
-      const rel = await r.json();
+      const list = (await r.json()).filter((x) => !x.draft && !x.prerelease);
+      const rel = list.find((x) => (x.assets || []).some((a) => a.name === SETUP)) || {};
       const asset = (rel.assets || []).find((a) => a.name === SETUP);
       cache = {
         at: Date.now(),
@@ -39,7 +42,8 @@ router.get('/app/latest', async (_req, res) => {
   const v = await latest();
   res.json({ version: v.version, published: v.published || null, size: v.size || null });
 });
-// A stable link for the button; GitHub's own /latest/download/ link does the rest.
-router.get('/app/download', (_req, res) => {
-  res.redirect(`https://github.com/${APP_RELEASES_REPO}/releases/latest/download/${SETUP}`);
+// A stable link for the button: the installer from the newest release that has one.
+router.get('/app/download', async (_req, res) => {
+  const v = await latest();
+  res.redirect(v.url || `https://github.com/${APP_RELEASES_REPO}/releases/latest/download/${SETUP}`);
 });
