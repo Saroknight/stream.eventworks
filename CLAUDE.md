@@ -130,10 +130,10 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
 - **Screen:** Wayland → xdg-desktop-portal ScreenCast via `ashpd` 0.14 (restore token saved at
   `$XDG_STATE_HOME/streamroom-live/screencast-token`, `PersistMode::ExplicitlyRevoked`;
   Settings → Screen → "Ask every time" = monitor index 1). The portal thread keeps the session
-  open until stop. X11 (no `WAYLAND_DISPLAY`) → `ximagesrc`.
+  open until stop. X11 (no `WAYLAND_DISPLAY`) → `ximagesrc ! video/x-raw,framerate=N/1`.
 - **Pipeline (GStreamer 0.25 bindings):**
   `pipewiresrc fd=<portal fd> <target> stream-properties="props,media.type=Video,…" … !
-  capssetter (square pixels) ! queue ! videorate ! convert ! [FrameGate probe] encoder !
+  capssetter (square pixels) ! queue ! convert ! [FrameGate probe] encoder !
   h264parse ! appsink`.
 - **Encoders, tried in order** until one produces a frame: `vah264enc`/`vah264lpenc` (with
   `vapostproc`), `vaapih264enc`, `nvh264enc`, `x264enc`, `openh264enc`.
@@ -146,7 +146,8 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
 - **Sound:** PipeWire. App streams come from `pw-dump`; each wanted app is a
   `pipewiresrc target-object=<serial>` (with `media.type=Audio`) into an `audiomixer`; "all PC
   audio" is `pulsesrc @DEFAULT_MONITOR@`. A guard sets failed pipelines back to Null (they
-  leaked threads and PipeWire streams before 0.4.7).
+  leaked threads and PipeWire streams before 0.4.7). `pw-dump` is killed after 2 s. Per-app
+  capture failing 3 times in a row shares all PC audio for 30 s, then tries per-app again.
 - **Updater on Linux:** downloads the package, verifies SHA256SUMS, `pkexec pacman -U`, relaunches.
 
 ### App behaviour shared by both
@@ -254,7 +255,10 @@ app releases don't need one (except changes to `appinfo.js`/download routes).
 - **Screens have variable frame rates (0/1).** `videorate max-rate` lets everything through
   (a 165 Hz monitor sent 165 fps and starved the bitrate). A fixed `framerate=N/1` caps filter
   after it breaks negotiation on GNOME (0.4.6 regression). The fix is `FrameGate` at the encoder
-  input; never drop *encoded* H.264 frames (later frames depend on them).
+  input; never drop *encoded* H.264 frames (later frames depend on them). `videorate` was removed
+  in 0.4.9 as dead weight.
+- **`ximagesrc` defaults to 25 fps** unless the caps after it set a framerate (X11 only; the
+  fixed rate there is safe, unlike the GNOME portal stream). Fixed in 0.4.9.
 - **KDE can report pixel aspect 2147483647:1**, which overflows scalers: force square pixels
   with `capssetter` and spell out the output width and height.
 - **GNOME's portal doesn't report the PipeWire serial;** look it up on the portal connection.
@@ -301,3 +305,5 @@ Not started unless the owner picks them:
 8. Linux 0.4.8: quality pass (fmt/clippy in CI, shared GStreamer pipeline helper, encoder enum,
    real frame counters, 0600 `account.dat`, updater off the async runtime) and "Check for
    updates" in the ⋯ menu.
+9. Linux 0.4.9: X11 streams at the chosen fps (was stuck at 25), `pw-dump` timeout, per-app sound
+   fallback is temporary instead of permanent, `videorate` removed.
