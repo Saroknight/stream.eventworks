@@ -242,6 +242,7 @@ async fn launch(app: AppHandle, l: Launch) -> Result<(), String> {
             Err(e) if signed_in_here => log::info(&format!("sign-in code not used ({e:#}); keeping the current sign-in")),
             Err(e) => {
                 let message = format!("{e:#}");
+                log::info(&format!("sign-in with the link failed: {message}"));
                 set_status(&app, Status::Error { message: message.clone() });
                 return Err(message);
             }
@@ -263,6 +264,7 @@ fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
         if !(a.starts_with("streamroom://") || a.contains("/live/")) {
             continue;
         }
+        log::info(&format!("received link: {}", redact(&a)));
         match parse_launch(&a) {
             Ok(l) => {
                 let app = app.clone();
@@ -271,12 +273,41 @@ fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
                 });
             }
             Err(e) => {
+                log::info(&format!("couldn't read that link: {e:#}"));
                 show_main(app);
                 set_status(app, Status::Error { message: format!("{e:#}") });
             }
         }
         return;
     }
+}
+
+/// Links in the log without their secrets (sign-in codes, tickets).
+fn redact(link: &str) -> String {
+    let mut out = String::new();
+    let mut skip = false;
+    let mut i = 0;
+    let b = link.as_bytes();
+    while i < b.len() {
+        let rest = &link[i..];
+        if rest.starts_with("pair=") || rest.starts_with("k=") || rest.starts_with("k%3D") {
+            let key = &rest[..rest.find(['=', 'D']).map(|p| p + 1).unwrap_or(0)];
+            out.push_str(key);
+            out.push('…');
+            i += key.len();
+            skip = true;
+            continue;
+        }
+        let c = rest.chars().next().unwrap();
+        if skip && (c == '&' || c == '#') {
+            skip = false;
+        }
+        if !skip {
+            out.push(c);
+        }
+        i += c.len_utf8();
+    }
+    out
 }
 
 // ---------- settings ----------

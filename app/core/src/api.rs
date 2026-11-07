@@ -32,6 +32,9 @@ impl Launch {
 /// Accepts `streamroom://open?server=…&room=…&pair=…`, plus everything [`link::parse`] accepts.
 pub fn parse_launch(input: &str) -> Result<Launch> {
     let input = input.trim().trim_matches('"');
+    // Some browsers or Windows add a slash: streamroom://open/?…
+    let normalized = input.replacen("streamroom://open/?", "streamroom://open?", 1);
+    let input = normalized.as_str();
     if input.starts_with("streamroom://open?") {
         let u = url::Url::parse(input).context("that link is damaged. Copy it again.")?;
         let get = |k: &str| u.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.into_owned()).filter(|v| !v.is_empty());
@@ -194,7 +197,7 @@ mod tests {
             l,
             Launch::Open { server: "https://stream.eventworks.click".into(), room: Some("AbC-12".into()), pair: Some("x.y".into()) }
         );
-        let l = parse_launch("streamroom://open?server=http://localhost:3000/").unwrap();
+        let l = parse_launch("streamroom://open/?server=http://localhost:3000/").unwrap();
         assert_eq!(l, Launch::Open { server: "http://localhost:3000".into(), room: None, pair: None });
         // Room ids are plain: anything else is dropped rather than put into a URL path.
         let l = parse_launch("streamroom://open?server=https://a.b&room=../admin").unwrap();
