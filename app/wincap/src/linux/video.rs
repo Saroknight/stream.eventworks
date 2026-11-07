@@ -137,7 +137,11 @@ fn pipeline_text(screen: &Screen, target: &str, enc: &Enc, opts: &VideoOptions) 
         format!("videoconvert ! videoscale ! video/x-raw,format={fmt}{size}")
     };
     format!(
-        "{src} ! queue max-size-buffers=2 leaky=downstream ! videorate drop-only=true max-rate={fps} ! {convert} ! \
+        // PipeWire screens have a variable frame rate (0/1), and then videorate's max-rate lets
+        // everything through (a 165 Hz monitor sent 165 fps, starving each frame of bitrate).
+        // A fixed output rate makes it drop down to the setting (drop-only: never duplicates).
+        "{src} ! queue max-size-buffers=2 leaky=downstream ! videorate drop-only=true max-rate={fps} ! \
+         video/x-raw,framerate={fps}/1 ! {convert} ! \
          {enc} name=enc {settings} ! h264parse config-interval=-1 ! \
          video/x-h264,stream-format=byte-stream,alignment=au ! \
          appsink name=sink sync=false max-buffers=4 drop=true",
