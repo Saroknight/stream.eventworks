@@ -264,6 +264,17 @@ fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
         if !(a.starts_with("streamroom://") || a.contains("/live/")) {
             continue;
         }
+        // The same link can arrive twice (second-launch arguments and the open-url event).
+        {
+            static LAST: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+            let mut last = LAST.lock().unwrap();
+            if let Some((prev, at)) = last.as_ref() {
+                if *prev == a && at.elapsed() < std::time::Duration::from_secs(10) {
+                    return;
+                }
+            }
+            *last = Some((a.clone(), std::time::Instant::now()));
+        }
         log::info(&format!("received link: {}", redact(&a)));
         match parse_launch(&a) {
             Ok(l) => {
@@ -520,12 +531,14 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 fn main() {
     streamroom_core::init();
     tauri::Builder::default()
-        // Must be first: a second launch (e.g. clicking "Open the app" again) passes its link
-        // to this copy, which the deep-link plugin turns into an open-url event.
+        // Must be first: a second launch (clicking "Open Streamroom Live" while the app is
+        // already open) hands its command line to this copy. Act on its link here: the deep-link
+        // plugin's open-url event doesn't reliably fire for it. If both arrive, the duplicate is
+        // ignored (see handle_links).
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             show_main(app);
-            // Plain https app links on the command line (streamroom:// ones arrive via deep link).
-            handle_links(app, argv.into_iter().skip(1).filter(|a| !a.starts_with("streamroom://")));
+            log::info(&format!("second launch with {} argument(s)", argv.len().saturating_sub(1)));
+            handle_links(app, argv.into_iter().skip(1));
         }))
         .plugin(tauri_plugin_deep_link::init())
         .manage(AppState {
