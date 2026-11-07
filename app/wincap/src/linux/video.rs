@@ -63,15 +63,35 @@ enum Screen {
 }
 
 impl Screen {
-    fn source(&self) -> String {
+    /// Ways of pointing pipewiresrc at the screen stream, best first. PipeWire versions differ:
+    /// newer ones find a stream by its serial (`target-object`), older ones by node id (`path`,
+    /// deprecated but still what many installs use); last resort, no target (the portal's
+    /// connection only contains the shared screen).
+    fn targets(&self) -> Vec<String> {
+        match self {
+            Screen::Portal(p) => {
+                let mut t = Vec::new();
+                if let Some(s) = p.serial {
+                    t.push(format!("target-object={s}"));
+                }
+                t.push(format!("path={}", p.node));
+                if p.serial.is_none() {
+                    t.push(format!("target-object={}", p.node));
+                }
+                t.push(String::new());
+                t
+            }
+            Screen::X11 { .. } => vec![String::new()],
+        }
+    }
+    fn source(&self, target: &str) -> String {
         match self {
             // System-memory frames: the safest path across desktops and drivers.
             Screen::Portal(p) => format!(
                 // Screens have square pixels. Overwrite whatever pixel shape the stream claims:
                 // KDE's can come out as 2147483647:1, which makes every scaler overflow.
-                "pipewiresrc name=src fd={} path={} do-timestamp=true keepalive-time=1000 resend-last=true ! {SQUARE}",
+                "pipewiresrc name=src fd={} {target} do-timestamp=true keepalive-time=1000 resend-last=true ! {SQUARE}",
                 p.fd.as_raw_fd(),
-                p.node
             ),
             Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! {SQUARE}"),
         }
@@ -91,7 +111,7 @@ impl Screen {
     }
 }
 
-fn pipeline_text(screen: &Screen, enc: &Enc, opts: &VideoOptions) -> String {
+fn pipeline_text(screen: &Screen, target: &str, enc: &Enc, opts: &VideoOptions) -> String {
     let fps = opts.fps.max(1);
     let kbps = (opts.bitrate_bps / 1000).max(500);
     // Output size: when the screen's shape is known, spell out width and height (even numbers,
@@ -116,7 +136,7 @@ fn pipeline_text(screen: &Screen, enc: &Enc, opts: &VideoOptions) -> String {
          {enc} name=enc {settings} ! h264parse config-interval=-1 ! \
          video/x-h264,stream-format=byte-stream,alignment=au ! \
          appsink name=sink sync=false max-buffers=4 drop=true",
-        src = screen.source(),
+        src = screen.source(target),
         enc = enc.element,
         settings = encoder_settings(enc, kbps, fps * 2),
     )
@@ -183,15 +203,32 @@ fn try_start(text: &str) -> Result<Running> {
 }
 
 /// Tries each available encoder in order; the first that produces video wins.
-fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(Running, Enc, Vec<String>), Vec<String>> {
+fn start_encoders(screen: &Screen, opts: &VideoOptions) -> std::result::Result<(Running, Enc, Vec<String>, String), Vec<String>> {
     let mut tried = Vec::new();
+    let mut targets = screen.targets();
     for enc in ENCODERS.iter().filter(|e| available(e.element)) {
         if enc.va && !available("vapostproc") {
             continue;
         }
-        match try_start(&pipeline_text(screen, enc, opts)) {
-            Ok(r) => return Ok((r, *enc, tried)),
-            Err(e) => tried.push(format!("{}: {e:#}", enc.element)),
+        // "target not found" means this PipeWire wants the stream named another way: move on
+        // to the next way (for this and the following encoders).
+        loop {
+            let target = targets[0].clone();
+            match try_start(&pipeline_text(screen, &target, enc, opts)) {
+                Ok(r) => {
+                    return Ok((r, *enc, tried, target));
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    let label = if target.is_empty() { "no target".to_string() } else { target.clone() };
+                    tried.push(format!("{} [{label}]: {msg}", enc.element));
+                    if msg.contains("target not found") && targets.len() > 1 {
+                        targets.remove(0);
+                        continue;
+                    }
+                    break;
+                }
+            }
         }
     }
     Err(tried)
@@ -230,14 +267,23 @@ pub fn start_video(
             t
         });
     }
-    let (run, enc, tried) = match result {
+    let (run, enc, tried, target) = match result {
         Ok(r) => r,
         Err(tried) => {
+            // What the desktop handed over, for troubleshooting.
+            let detail = match &screen {
+                Screen::Portal(p) => {
+                    let fd = p.fd.as_raw_fd();
+                    let open = std::fs::read_link(format!("/proc/self/fd/{fd}")).map(|l| l.display().to_string()).unwrap_or_else(|e| format!("not open: {e}"));
+                    format!("\n(portal stream: node {}, serial {:?}, size {:?}, fd {fd} = {open})", p.node, p.serial, p.size)
+                }
+                Screen::X11 { .. } => String::new(),
+            };
             drop(screen);
             if tried.is_empty() {
                 bail!("no H.264 encoder found. Install gst-plugin-va (AMD/Intel) or gst-plugins-ugly (x264)");
             }
-            bail!("couldn't start video with any encoder:\n{}", tried.join("\n"));
+            bail!("couldn't start video with any encoder:\n{}{detail}", tried.join("\n"));
         }
     };
 
@@ -256,7 +302,7 @@ pub fn start_video(
     let info = VideoInfo {
         adapter: if enc.label.contains("graphics card") { "graphics card".into() } else { "processor".into() },
         encoder: enc.label.into(),
-        capture_method: screen.method().into(),
+        capture_method: if target.is_empty() { screen.method().into() } else { format!("{} ({target})", screen.method()) },
         source_width: src.0,
         source_height: src.1,
         width: out.0,

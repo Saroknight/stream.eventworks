@@ -19,6 +19,8 @@ use crate::Control;
 pub struct PortalStream {
     pub fd: OwnedFd,
     pub node: u32,
+    /// The stream's PipeWire serial, when the desktop reports it (newer PipeWire finds streams by it).
+    pub serial: Option<u64>,
     pub size: Option<(i32, i32)>,
     /// A remembered choice was used (no dialog).
     pub restored: bool,
@@ -52,7 +54,7 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
     let restored = remember && token_path().map(|p| p.exists()).unwrap_or(false);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = stop.clone();
-    let (tx, rx) = std::sync::mpsc::channel::<Result<(OwnedFd, u32, Option<(i32, i32)>)>>();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(OwnedFd, u32, Option<u64>, Option<(i32, i32)>)>>();
     let thread = std::thread::Builder::new().name("screen-portal".into()).spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
@@ -105,10 +107,10 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
                 let _ = tx.send(Err(anyhow!("nothing was chosen to share")));
                 return;
             };
-            let (node, size) = (stream.pipe_wire_node_id(), stream.size());
+            let (node, serial, size) = (stream.pipe_wire_node_id(), stream.pipewire_serial(), stream.size());
             match proxy.open_pipe_wire_remote(&session, Default::default()).await {
                 Ok(fd) => {
-                    let _ = tx.send(Ok((fd, node, size)));
+                    let _ = tx.send(Ok((fd, node, serial, size)));
                 }
                 Err(e) => {
                     let _ = tx.send(Err(anyhow!("couldn't connect to the screen stream: {e}")));
@@ -123,9 +125,9 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
         });
     })?;
     // The user may take a while in the dialog.
-    let (fd, node, size) = rx
+    let (fd, node, serial, size) = rx
         .recv_timeout(Duration::from_secs(180))
         .map_err(|_| anyhow!("no screen was chosen in time"))?
         .context("screen sharing")?;
-    Ok(PortalStream { fd, node, size, restored, stop, _thread: thread })
+    Ok(PortalStream { fd, node, serial, size, restored, stop, _thread: thread })
 }
