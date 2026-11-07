@@ -314,10 +314,11 @@ $('appOpenBtn').onclick = async () => {
 $('appCopyBtn').onclick = async () => {
   try { await copy(await appOpenLink(), 'Copied. In Streamroom Live, paste it into "Have a link?"'); } catch (e) { $('goErr').textContent = e.message; }
 };
-// The app is Windows-only: elsewhere, lead with the browser option.
-if (!/Windows/.test(navigator.userAgent)) {
+// The app runs on Windows and Linux: elsewhere (Mac, ChromeOS), lead with the browser option.
+const appOS = /Windows/.test(navigator.userAgent) || (/Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent));
+if (!appOS) {
   $('browserBox').open = true;
-  $('appHint').textContent = 'Streamroom Live is a Windows app. On this computer, stream from the browser below.';
+  $('appHint').textContent = 'Streamroom Live runs on Windows and Linux. On this computer, stream from the browser below.';
   $('appOpenBtn').classList.remove('primary');
 }
 $('goLive').addEventListener('close', () => $('appAfter').classList.add('hidden'));

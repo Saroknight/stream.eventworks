@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Streamroom Live
+Comment=Stream your screen to Streamroom
+Exec=streamroom-live %u
+Icon=streamroom-live
+Terminal=false
+Categories=AudioVideo;Video;Network;
+StartupWMClass=streamroom-live
+# streamroom:// links from the site's "Open Streamroom Live" button open this app.
+MimeType=x-scheme-handler/streamroom;

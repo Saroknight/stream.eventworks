@@ -34,3 +34,13 @@ features = [
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"
+
+# Linux: screen via the desktop's screen-share portal (Wayland) or X11, encoded by GStreamer
+# (VA-API on AMD/Intel, NVENC on NVIDIA, x264 as a fallback); sound via PipeWire.
+[target.'cfg(target_os = "linux")'.dependencies]
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "screencast"] }
+tokio = { version = "1", features = ["rt", "time"] }
+serde_json = "1"

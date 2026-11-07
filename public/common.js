@@ -92,7 +92,7 @@ export function accountMenu(user) {
     { role: 'menu' },
     h('div.menu-head', {}, h('b', {}, user.name), user.isAdmin ? h('span.badge', {}, 'admin') : null),
     h('button.menu-item', { onclick: () => { close(); showDeviceLink(); } }, '📱 Sign in another device'),
-    h('a.menu-item', { href: '/download' }, '🎮 Get the Windows app'),
+    h('a.menu-item', { href: '/download' }, '🎮 Get the app (Windows, Linux)'),
     user.isAdmin ? h('a.menu-item', { href: '/admin' }, '⚙️ Admin') : null,
     h('button.menu-item', {
       onclick: async () => { await api('/api/auth/logout', {}); location.href = '/'; },

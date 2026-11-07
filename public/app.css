@@ -316,3 +316,11 @@ td.actions .btn { margin-left: 4px; }
 .golive-browser-body #browserGo { justify-self: start; }
 .golive-browser .adv { margin: 0; }
 .ok-text { color: #3ddc97; }
+
+/* ---------- download: Windows / Linux ---------- */
+.os-switch { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); margin: 8px 0 18px; }
+.os-switch button { background: none; border: 0; color: var(--muted); padding: 8px 14px; border-radius: 9px; cursor: pointer; font: inherit; font-weight: 600; }
+.os-switch button[aria-selected="true"] { background: var(--panel-2, #1f222b); color: var(--text); }
+.cmd { display: flex; align-items: center; gap: 10px; background: #0b0c10; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 4px 0 10px; }
+.cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; color: #e8e9ee; user-select: all; }
+.dl-hero > div { min-width: 0; flex: 1; }

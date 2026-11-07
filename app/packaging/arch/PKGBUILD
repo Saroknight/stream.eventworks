@@ -1,0 +1,33 @@
+# Streamroom Live for Arch Linux and derivatives (CachyOS, EndeavourOS, Manjaro...).
+# Built by CI from prebuilt binaries placed next to this file:
+#   streamroom-live, streamroom-live-cli, streamroom-live.desktop, streamroom-live.png
+# Install:  sudo pacman -U streamroom-live-x86_64.pkg.tar.zst
+pkgname=streamroom-live
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Stream your screen to a Streamroom room (VA-API/NVENC hardware encoding)"
+arch=('x86_64')
+url="https://github.com/Saroknight/stream.eventworks"
+license=('custom')
+depends=(
+  'webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator'
+  'gstreamer' 'gst-plugins-base' 'gst-plugins-good'
+  'gst-plugin-pipewire'   # screen (Wayland) and per-app sound
+  'gst-plugin-va'         # AMD/Intel hardware encoding (VA-API)
+  'gst-plugins-ugly'      # x264: software fallback so video always works
+  'pipewire' 'xdg-desktop-portal' 'polkit'
+)
+optdepends=(
+  'gst-plugins-bad: NVIDIA hardware encoding (NVENC)'
+  'xdg-desktop-portal-kde: screen sharing on KDE Plasma'
+  'xdg-desktop-portal-gnome: screen sharing on GNOME'
+  'xdg-desktop-portal-hyprland: screen sharing on Hyprland'
+)
+options=('!strip' '!debug')
+
+package() {
+  install -Dm755 "$startdir/streamroom-live"          "$pkgdir/usr/bin/streamroom-live"
+  install -Dm755 "$startdir/streamroom-live-cli"      "$pkgdir/usr/bin/streamroom-live-cli"
+  install -Dm644 "$startdir/streamroom-live.desktop"  "$pkgdir/usr/share/applications/streamroom-live.desktop"
+  install -Dm644 "$startdir/streamroom-live.png"      "$pkgdir/usr/share/icons/hicolor/128x128/apps/streamroom-live.png"
+}

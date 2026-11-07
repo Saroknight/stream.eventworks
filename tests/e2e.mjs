@@ -216,9 +216,12 @@ async function main() {
         await f.click('#liveBtn'); // stop the browser stream so the app's is the only one
         await f.waitForSelector('#liveBar', { state: 'hidden' });
         const { url } = await f.evaluate((id) => fetch(`/api/rooms/${id}/app-open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((r) => r.json()), roomUrl.split('/').pop());
-        const cli = start('app-engine', process.env.E2E_CLI, [url, '--test-pattern', '--height', '720'], noProxy);
+        const extra = process.env.E2E_CLI_ARGS ? process.env.E2E_CLI_ARGS.split(' ') : ['--test-pattern', '--height', '720'];
+        const cli = start('app-engine', process.env.E2E_CLI, [url, ...extra], noProxy);
         try {
-          await waitFor(() => a.$$eval('.tile video', (vs) => vs.some((v) => v.videoHeight === 720)), '720p video from the app', 30000);
+          // Test pattern: any 720p. Real screen capture (E2E_CLI_ARGS): 1280x720 from a 16:9 screen.
+          const wantWidth = process.env.E2E_CLI_ARGS ? 1280 : 0;
+          await waitFor(() => a.$$eval('.tile video', (vs, w) => vs.some((v) => v.videoHeight === 720 && (!w || v.videoWidth === w)), wantWidth), '720p video from the app', 30000);
           // The streamer's own page shows the placeholder, not a second copy of the video.
           await waitFor(() => f.$eval('.tile.mine', (t) => t.innerText.includes('You (app)')), 'You (app) tile', 10000);
           await a.screenshot({ path: path.join(SHOTS, 'room-app-stream.png') });

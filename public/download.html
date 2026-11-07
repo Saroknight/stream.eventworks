@@ -13,48 +13,88 @@
       <a class="brand" href="/"><span class="dot"></span>Streamroom</a>
     </header>
     <main class="wrap dl">
-      <section class="dl-hero">
-        <img src="/app-icon.png" alt="" width="72" height="72">
-        <div>
-          <h1>Streamroom Live for Windows</h1>
-          <p class="lead">Stream your screen at a smooth 60 fps using your graphics card. Works with NVIDIA, AMD and Intel on Windows 10 and 11.</p>
-          <div class="dl-actions">
-            <a class="btn primary big" id="dlBtn" href="/api/app/download">⬇ Download for Windows</a>
-            <span class="hint" id="dlMeta">Free · no admin rights needed</span>
-          </div>
-        </div>
-      </section>
+      <div class="os-switch" role="tablist">
+        <button type="button" data-os="windows" aria-selected="true">Windows</button>
+        <button type="button" data-os="linux" aria-selected="false">Linux (Arch, CachyOS)</button>
+      </div>
 
-      <section class="dl-steps">
-        <div class="dl-step">
-          <span class="num">1</span>
-          <h3>Run the installer</h3>
-          <p>Open <b>Streamroom-Live-Setup.exe</b> from your downloads. It installs in a few seconds.</p>
-        </div>
-        <div class="dl-step">
-          <span class="num">2</span>
-          <h3>If Windows warns you</h3>
-          <p>You may see <i>"Windows protected your PC"</i>. That's because the app isn't from a big publisher. Click <b>More info</b>, then <b>Run anyway</b>.</p>
-          <div class="smartscreen" aria-hidden="true">
-            <div class="ss-title">Windows protected your PC</div>
-            <div class="ss-body">Microsoft Defender SmartScreen prevented an unrecognized app from starting…</div>
-            <div class="ss-link">More info</div>
-            <div class="ss-btns"><span class="ss-run">Run anyway</span><span>Don't run</span></div>
+      <div data-for="windows">
+        <section class="dl-hero">
+          <img src="/app-icon.png" alt="" width="72" height="72">
+          <div>
+            <h1>Streamroom Live for Windows</h1>
+            <p class="lead">Stream your screen at a smooth 60 fps using your graphics card. Works with NVIDIA, AMD and Intel on Windows 10 and 11.</p>
+            <div class="dl-actions">
+              <a class="btn primary big" id="dlBtn" href="/api/app/download">⬇ Download for Windows</a>
+              <span class="hint" id="dlMeta">Free · no admin rights needed</span>
+            </div>
           </div>
-        </div>
-        <div class="dl-step">
-          <span class="num">3</span>
-          <h3>Sign in once, then use the app</h3>
-          <p>In any room, click <b>Go Live</b>, then <b>Open Streamroom Live</b> (allow your browser to open it). You're live, and the app stays signed in: next time, start or join rooms right from the app.</p>
-        </div>
-      </section>
+        </section>
+
+        <section class="dl-steps">
+          <div class="dl-step">
+            <span class="num">1</span>
+            <h3>Run the installer</h3>
+            <p>Open <b>Streamroom-Live-Setup.exe</b> from your downloads. It installs in a few seconds.</p>
+          </div>
+          <div class="dl-step">
+            <span class="num">2</span>
+            <h3>If Windows warns you</h3>
+            <p>You may see <i>"Windows protected your PC"</i>. That's because the app isn't from a big publisher. Click <b>More info</b>, then <b>Run anyway</b>.</p>
+            <div class="smartscreen" aria-hidden="true">
+              <div class="ss-title">Windows protected your PC</div>
+              <div class="ss-body">Microsoft Defender SmartScreen prevented an unrecognized app from starting…</div>
+              <div class="ss-link">More info</div>
+              <div class="ss-btns"><span class="ss-run">Run anyway</span><span>Don't run</span></div>
+            </div>
+          </div>
+          <div class="dl-step">
+            <span class="num">3</span>
+            <h3>Sign in once, then use the app</h3>
+            <p>In any room, click <b>Go Live</b>, then <b>Open Streamroom Live</b> (allow your browser to open it). You're live, and the app stays signed in: next time, start or join rooms right from the app.</p>
+          </div>
+        </section>
+      </div>
+
+      <div data-for="linux" class="hidden">
+        <section class="dl-hero">
+          <img src="/app-icon.png" alt="" width="72" height="72">
+          <div>
+            <h1>Streamroom Live for Linux</h1>
+            <p class="lead">For Arch and Arch-based distros (CachyOS, EndeavourOS, Manjaro). Encodes on your graphics card: VA-API on AMD and Intel, NVENC on NVIDIA. Works on Wayland (KDE, GNOME, Hyprland) and X11.</p>
+            <div class="cmd">
+              <code id="linuxCmd">curl -LO https://github.com/Saroknight/stream.eventworks/releases/latest/download/streamroom-live-x86_64.pkg.tar.zst &amp;&amp; sudo pacman -U streamroom-live-x86_64.pkg.tar.zst</code>
+              <button class="btn sm" type="button" id="copyCmd">Copy</button>
+            </div>
+            <span class="hint" id="dlMetaLinux">Free · installs with pacman, along with the GStreamer pieces it needs</span>
+          </div>
+        </section>
+
+        <section class="dl-steps">
+          <div class="dl-step">
+            <span class="num">1</span>
+            <h3>Paste it in a terminal</h3>
+            <p>Copy the command above, paste it into a terminal, press Enter, and type your password when asked. pacman installs the app and what it needs.</p>
+          </div>
+          <div class="dl-step">
+            <span class="num">2</span>
+            <h3>Pick your screen once</h3>
+            <p>The first time you go live, your desktop asks which screen or window to share. Pick it and click <b>Share</b>. The app remembers it; to pick again, choose <b>Ask every time</b> under Screen in the app's Settings.</p>
+          </div>
+          <div class="dl-step">
+            <span class="num">3</span>
+            <h3>Sign in once, then use the app</h3>
+            <p>In any room, click <b>Go Live</b>, then <b>Open Streamroom Live</b> (allow your browser to open it). You're live, and the app stays signed in: next time, start or join rooms right from the app.</p>
+          </div>
+        </section>
+      </div>
 
       <section class="dl-faq">
-        <details><summary>Does it update itself?</summary><p>Yes. When a new version is out, the app shows an <b>Update now</b> button. It never updates in the middle of a stream.</p></details>
+        <details><summary>Does it update itself?</summary><p>Yes. When a new version is out, the app shows an <b>Update now</b> button. It never updates in the middle of a stream. On Linux it asks for your password, since pacman installs the update.</p></details>
         <details><summary>How do I sign the app out?</summary><p>In the app, click <b>⋯</b> at the top, then <b>Sign out of this PC</b>. The admin can also sign it out from the admin page.</p></details>
         <details><summary>How do I stop streaming?</summary><p>Click <b>Stop streaming</b> in the app, or right-click the red Streamroom Live icon near the clock and choose <b>Stop streaming</b>. Closing the window keeps you live, so you can play without it in the way.</p></details>
         <details><summary>Something's wrong</summary><p>In the app, click <b>Copy diagnostics</b> at the bottom and send it to whoever runs this Streamroom.</p></details>
-        <details><summary>How do I uninstall it?</summary><p>Settings → Apps → Installed apps → Streamroom Live → Uninstall.</p></details>
+        <details><summary>How do I uninstall it?</summary><p>Windows: Settings → Apps → Installed apps → Streamroom Live → Uninstall. Linux: <code>sudo pacman -R streamroom-live</code>.</p></details>
       </section>
       <p class="hint" id="dlFoot" style="text-align:center;margin-top:24px"></p>
     </main>
@@ -73,10 +113,24 @@
         }
       }
     } catch {}
+    // Windows or Linux: show the one this computer runs (either can be picked).
     const ua = navigator.userAgent;
-    if (!/Windows/.test(ua) && /Mac|iPhone|iPad|Android|Linux/.test(ua)) {
-      document.getElementById('dlMeta').textContent += ' · You\'re not on Windows: download it on your Windows PC.';
+    const isLinux = /Linux/.test(ua) && !/Android/.test(ua);
+    function show(os) {
+      document.querySelectorAll('[data-for]').forEach((el) => el.classList.toggle('hidden', el.dataset.for !== os));
+      document.querySelectorAll('.os-switch button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.os === os)));
     }
+    document.querySelectorAll('.os-switch button').forEach((b) => { b.onclick = () => show(b.dataset.os); });
+    show(isLinux || location.hash === '#linux' ? 'linux' : 'windows');
+    if (!/Windows/.test(ua) && !isLinux && /Mac|iPhone|iPad|Android/.test(ua)) {
+      document.getElementById('dlMeta').textContent += ' · Get it on your Windows or Linux PC.';
+    }
+    document.getElementById('copyCmd').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById('linuxCmd').textContent);
+        document.getElementById('copyCmd').textContent = 'Copied';
+      } catch { /* select it instead */ getSelection().selectAllChildren(document.getElementById('linuxCmd')); }
+    };
   </script>
 </body>
 </html>

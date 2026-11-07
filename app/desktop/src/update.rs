@@ -1,12 +1,18 @@
 //! Self-update from GitHub Releases: check the latest release, download the installer over
-//! HTTPS, verify it against the release's SHA256SUMS, then run it silently and relaunch.
+//! HTTPS, verify it against the release's SHA256SUMS, then install it and relaunch.
+//! Windows: the NSIS installer, run silently after this app exits.
+//! Linux (Arch): the pacman package, installed with `pkexec pacman -U` (the desktop asks for
+//! the password), then the new version is started.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const REPO: &str = "Saroknight/stream.eventworks";
+#[cfg(not(target_os = "linux"))]
 const SETUP: &str = "Streamroom-Live-Setup.exe";
+#[cfg(target_os = "linux")]
+const SETUP: &str = "streamroom-live-x86_64.pkg.tar.zst";
 const SUMS: &str = "SHA256SUMS";
 
 #[derive(Clone, Debug, Serialize)]
@@ -82,9 +88,31 @@ pub async fn install(a: &Available) -> Result<()> {
     if actual != expected {
         bail!("the downloaded installer didn't match its checksum, so it wasn't run");
     }
-    let setup = std::env::temp_dir().join(format!("Streamroom-Live-Setup-{}.exe", a.version));
+    let setup = std::env::temp_dir().join(format!("{}-{}", a.version, SETUP));
     std::fs::write(&setup, &bytes).context("saving the installer")?;
     run_after_exit(&setup)
+}
+
+/// Install the package (pacman asks for the password through the desktop), then start the new
+/// version; the caller exits right after.
+#[cfg(target_os = "linux")]
+fn run_after_exit(setup: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("pkexec")
+        .args(["pacman", "-U", "--noconfirm"])
+        .arg(setup)
+        .status()
+        .context("starting pkexec (polkit)")?;
+    if !status.success() {
+        bail!("the update wasn't installed (password cancelled, or pacman refused it)");
+    }
+    let _ = std::fs::remove_file(setup);
+    // Start the new version once this one has exited.
+    let pid = std::process::id();
+    std::process::Command::new("sh")
+        .args(["-c", &format!("while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; exec streamroom-live")])
+        .spawn()
+        .context("relaunching")?;
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -109,9 +137,9 @@ fn run_after_exit(setup: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn run_after_exit(_setup: &std::path::Path) -> Result<()> {
-    bail!("updates are only installed on Windows")
+    bail!("updates aren't installed automatically on this system")
 }
 
 #[cfg(test)]

@@ -1,5 +1,7 @@
-//! Windows capture and hardware encoding for Streamroom Live.
+//! Screen capture and hardware encoding for Streamroom Live: Windows (below) and Linux
+//! (`linux/`: Wayland portal or X11, GStreamer with VA-API / NVENC / x264, PipeWire sound).
 //!
+//! Windows:
 //! Video: DXGI Desktop Duplication -> D3D11 video processor (BGRA -> NV12, scaling, all on the GPU)
 //! -> Media Foundation hardware H.264 encoder (NVENC / AMF / QuickSync behind one interface).
 //! Frames never leave the GPU until they are compressed.
@@ -153,12 +155,17 @@ pub fn list_monitors() -> Vec<Monitor> {
     d3d::list_monitors()
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{audio_apps, list_monitors, start_audio, start_video};
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn list_monitors() -> Vec<Monitor> {
     Vec::new()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn start_video(
     _opts: VideoOptions,
     _control: std::sync::Arc<Control>,
@@ -167,7 +174,7 @@ pub fn start_video(
     anyhow::bail!("screen capture is only available on Windows")
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn start_audio(
     _control: std::sync::Arc<Control>,
     _tx: std::sync::mpsc::SyncSender<AudioChunk>,
@@ -176,7 +183,7 @@ pub fn start_audio(
     anyhow::bail!("audio capture is only available on Windows")
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn audio_apps() -> Vec<String> {
     Vec::new()
 }
