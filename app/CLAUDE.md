@@ -69,6 +69,8 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   like LiveKit through the `tracing-log` bridge), and `log::flush()` must run before exiting
   (the app does it on `RunEvent::Exit`, the CLI before `process::exit`) or the last lines are
   lost. Capture threads report problems with `Control::report_error`, which just logs them.
+- Linux logs each bitrate change from the network side ("network side set the video bitrate",
+  in kbps), so a soft stream can be told apart from a slow network.
 - A dropped encoded frame (the network side is behind) requests a keyframe on both platforms;
   on Linux at most once a second (`KeyframeLimit`), since keyframes are big.
 
@@ -90,7 +92,7 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
 
 - **PipeWire ≥1.6 + WirePlumber 0.5: set `media.type` on `pipewiresrc`.** Without it the stream
   registers as `Stream/Input/Unknown`, WirePlumber only links matching media types, and every
-  target fails with "target not found" (screen and per-app sound). Found by Studdder (PR #1).
+  target fails with "target not found" (screen and per-app sound).
 - **Screens have variable frame rates (0/1).** `videorate max-rate` lets everything through
   (a 165 Hz monitor sent 165 fps and starved the bitrate). A fixed `framerate=N/1` caps filter
   after it breaks negotiation on GNOME (0.4.6 regression). The fix is `FrameGate` at the encoder
