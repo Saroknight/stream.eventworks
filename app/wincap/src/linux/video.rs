@@ -67,7 +67,10 @@ impl Screen {
     }
     fn source(&self, target: &str, fps: u32) -> String {
         match self {
-            // System-memory frames: the safest path across desktops and drivers.
+            // No memory type is set here, so the encoder path picks it: `vapostproc` (vah264enc)
+            // accepts DMA-BUF frames, so they stay on the graphics card (GNOME + AMD: XR24 with a
+            // tiling modifier); `videoconvert` (the other encoders) only takes system memory,
+            // which PipeWire then sends instead.
             Screen::Portal(p) => format!(
                 // Say this is a video stream: WirePlumber only links nodes of the same media type,
                 // and recent pipewiresrc connects as "Unknown", which matches no screen
