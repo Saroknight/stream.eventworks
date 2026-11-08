@@ -1,14 +1,14 @@
 //! Console version of Streamroom Live, for troubleshooting and testing.
 //!
 //!   streamroom-live-cli "<app link>" [--height 1080] [--fps 60] [--bitrate 8] [--monitor 0]
-//!                       [--no-audio] [--no-cursor] [--test-pattern] [--list-monitors]
+//!                       [--no-audio] [--no-cursor] [--record] [--test-pattern] [--list-monitors]
 
 use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use streamroom_core::api::parse_launch;
-use streamroom_core::{log, Api, Launch, Session, Settings, Source};
+use streamroom_core::{log, Api, Launch, Recording, Session, Settings, Source};
 use tracing::{error, info};
 
 const HELP: &str = "Streamroom Live (console)
@@ -22,6 +22,7 @@ Options:
   --monitor N        Monitor to capture, 0 = primary (default)
   --no-audio         Don't share PC audio
   --no-cursor        Don't show the mouse cursor
+  --record           Also save a copy in ~/Videos/Streamroom (Linux)
   --list-monitors    Show monitors and exit
   --capture-test     Capture and encode the screen for 5 seconds, no server needed (troubleshooting)
   --test-pattern     Send a moving test pattern instead of the screen (testing only)
@@ -76,6 +77,7 @@ async fn run() -> Result<()> {
             "--monitor" => settings.monitor = value("--monitor")?.parse().context("--monitor")?,
             "--no-audio" => settings.audio = false,
             "--no-cursor" => settings.cursor = false,
+            "--record" => settings.record = true,
             "--test-pattern" => source = Source::TestPattern,
             "--name" => {
                 value("--name")?; // accepted for compatibility; the server uses your account name
@@ -129,7 +131,13 @@ async fn run() -> Result<()> {
     if !info.video.unsupported_settings.is_empty() {
         println!("          (encoder ignored: {})", info.video.unsupported_settings.join(", "));
     }
-    println!("Audio:    {}\n\nLIVE. Press Ctrl+C to stop.\n", info.audio);
+    println!("Audio:    {}", info.audio);
+    match &info.recording {
+        Recording::Off => {}
+        Recording::On { path } => println!("Saving:   {path}"),
+        Recording::Failed { why, .. } => println!("Saving:   couldn't start ({why})"),
+    }
+    println!("\nLIVE. Press Ctrl+C to stop.\n");
 
     let mut ticks = 0u64;
     let reason = loop {

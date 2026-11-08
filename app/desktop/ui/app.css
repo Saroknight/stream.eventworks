@@ -114,5 +114,8 @@ header .who .muted { display: block; overflow: hidden; text-overflow: ellipsis; 
 .state[data-state="idle"] { text-align: left; }
 .settings label.full { display: block; margin-top: 4px; }
 .hint-line { margin: 6px 0 4px; }
+.rec { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+.rec span { overflow-wrap: anywhere; }
+.rec.failed span { color: #ff8a95; }
 .apps { background: var(--panel-2); border-radius: 10px; padding: 8px 12px; margin: 6px 0 8px; }
 .apps-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }

@@ -20,6 +20,7 @@ use super::encoder::Encoder;
 use super::gate::FrameGate;
 use super::launch::{available, launch, next_error, Pipeline, PipelineError};
 use super::portal;
+use super::record;
 use crate::{Control, EncodedFrame, VideoInfo, VideoOptions};
 
 /// Monitor index 1 on Linux = ask which screen or window every time.
@@ -471,6 +472,8 @@ fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &
     let latency_us = u32::try_from(latency.as_micros()).unwrap_or(u32::MAX);
     s.last_latency_us.store(latency_us, Ordering::Relaxed);
     let capture_unix_us = now_us() - i64::from(latency_us);
+    // Saved before the network side, which may drop it (later frames would then not decode).
+    record::video(control, &map, keyframe, Instant::now().checked_sub(latency).unwrap_or_else(Instant::now));
     let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us, encode_latency_us: latency_us };
     match tx.try_send(frame) {
         Ok(()) => Sent::Delivered,

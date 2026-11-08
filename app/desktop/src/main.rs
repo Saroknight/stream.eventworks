@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use serde::Serialize;
 use streamroom_core::api::parse_launch;
-use streamroom_core::{log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LiveInfo, Monitor, Session, Settings, SignedOut, Source};
+use streamroom_core::{
+    log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LiveInfo, Monitor, Recording, Session, Settings, SignedOut, Source, CAN_RECORD,
+};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry};
@@ -30,7 +32,7 @@ use tracing::{info, warn};
 enum Status {
     Idle,
     Connecting { server: String },
-    Live { info: LiveInfo, since: u64 },
+    Live { info: Box<LiveInfo>, since: u64 },
     Ended { message: String },
     Error { message: String },
 }
@@ -80,6 +82,8 @@ struct Snapshot {
     version: &'static str,
     update: Option<update::Available>,
     log_path: String,
+    /// This build can save a copy of the stream (Linux).
+    can_record: bool,
 }
 
 // ---------- status ----------
@@ -192,7 +196,7 @@ async fn begin(app: AppHandle, target: Target) {
     match started {
         Ok((session, info)) => {
             *slot = Some(session);
-            set_status(&app, Status::Live { info, since: now_ms() });
+            set_status(&app, Status::Live { info: Box::new(info), since: now_ms() });
         }
         Err(e) => {
             warn!("could not go live: {e:#}");
@@ -360,6 +364,7 @@ fn get_state(state: State<'_, AppState>) -> Snapshot {
         version: env!("CARGO_PKG_VERSION"),
         update: state.update.lock().unwrap_or_else(PoisonError::into_inner).clone(),
         log_path: log::path().display().to_string(),
+        can_record: CAN_RECORD,
     }
 }
 
@@ -491,6 +496,21 @@ fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
+/// "Save a copy on this computer": saved as the setting for next time, and started or stopped
+/// right away when live (the stream carries on).
+#[tauri::command]
+async fn set_recording(app: AppHandle, on: bool) -> Result<Recording, String> {
+    let mut settings = app.state::<AppState>().settings.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    settings.record = on;
+    save_settings(app.clone(), settings)?;
+    let state = app.state::<AppState>();
+    let slot = state.session.lock().await;
+    Ok(match slot.as_ref() {
+        Some(s) => s.set_recording(on).await,
+        None => Recording::Off,
+    })
+}
+
 #[tauri::command]
 fn open_logs() {
     let path = log::path();
@@ -567,6 +587,7 @@ fn main() {
             restart,
             dismiss,
             save_settings,
+            set_recording,
             open_logs,
             check_update,
             install_update,

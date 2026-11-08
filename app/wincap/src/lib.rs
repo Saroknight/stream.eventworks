@@ -95,7 +95,29 @@ pub struct Control {
     pub stats: Stats,
     /// Why video capture stopped on its own, if it did (the first reason given).
     stopped: Mutex<Option<String>>,
+    /// The copy of the stream being saved, if any.
+    #[cfg(target_os = "linux")]
+    recording: Mutex<linux::record::Slot>,
 }
+
+/// Saving a copy of the stream on this computer (Linux only, see `CAN_RECORD`).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum Recording {
+    #[default]
+    Off,
+    On {
+        path: String,
+    },
+    /// Couldn't start, or stopped on its own (disk full, ...). The stream goes on.
+    Failed {
+        path: String,
+        why: String,
+    },
+}
+
+/// This build can save a copy of the stream.
+pub const CAN_RECORD: bool = cfg!(target_os = "linux");
 
 #[derive(Default)]
 pub struct Stats {
@@ -165,7 +187,20 @@ pub fn list_monitors() -> Vec<Monitor> {
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{audio_apps, list_monitors, start_audio, start_video};
+pub use linux::{audio_apps, list_monitors, recording, start_audio, start_recording, start_video, stop_recording};
+
+#[cfg(not(target_os = "linux"))]
+pub fn start_recording(_control: &Control, _with_audio: bool) -> anyhow::Result<std::path::PathBuf> {
+    anyhow::bail!("saving a copy of the stream is only available on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn stop_recording(_control: &Control) {}
+
+#[cfg(not(target_os = "linux"))]
+pub fn recording(_control: &Control) -> Recording {
+    Recording::Off
+}
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn list_monitors() -> Vec<Monitor> {

@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 
 pub use api::{Account, Api, Launch, SignedOut};
 pub use link::{AppLink, Joined};
-pub use wincap::{audio_apps, list_monitors, AudioMode, Control, Monitor, VideoInfo};
+pub use wincap::{audio_apps, list_monitors, AudioMode, Control, Monitor, Recording, VideoInfo, CAN_RECORD};
 
 /// Call once at startup. Two TLS backends end up compiled in through different dependencies;
 /// without picking one, the first secure (wss://) connection panics.
@@ -70,6 +70,8 @@ pub struct Settings {
     /// Exe names for "apps", e.g. ["eldenring.exe"].
     pub audio_apps: Vec<String>,
     pub cursor: bool,
+    /// Save a copy of the stream on this computer (Linux: `~/Videos/Streamroom`).
+    pub record: bool,
 }
 
 impl Default for Settings {
@@ -83,6 +85,7 @@ impl Default for Settings {
             audio_mode: AudioChoice::ExceptDiscord,
             audio_apps: Vec::new(),
             cursor: true,
+            record: false,
         }
     }
 }
@@ -121,6 +124,8 @@ pub struct LiveInfo {
     pub video: VideoInfo,
     pub bitrate_mbps: f32,
     pub audio: String,
+    /// Whether a copy is being saved, as going live left it.
+    pub recording: Recording,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -132,6 +137,7 @@ pub struct Stats {
     pub keyframes: u64,
     pub dropped: u64,
     pub seconds: u64,
+    pub recording: Recording,
 }
 
 struct Meter {
@@ -147,6 +153,10 @@ pub struct Session {
     threads: Vec<JoinHandle<()>>,
     events: tokio::task::JoinHandle<()>,
     meter: Mutex<Meter>,
+    /// Streaming the screen (not the test pattern), so a copy can be saved.
+    screen: bool,
+    /// Sound is being shared, so a saved copy has it too.
+    has_audio: bool,
 }
 
 impl Session {
@@ -168,7 +178,7 @@ impl Session {
 
         let control = Arc::new(Control::default());
         let result = Self::publish(&room, &control, settings, source).await;
-        let (info, threads) = match result {
+        let ((video, audio, has_audio), threads) = match result {
             Ok(r) => r,
             Err(e) => {
                 control.stop.store(true, Ordering::Relaxed);
@@ -199,8 +209,14 @@ impl Session {
         });
 
         let now = Instant::now();
-        let live =
-            LiveInfo { room_title: joined.title, server: server.to_string(), video: info.0, bitrate_mbps: settings.bitrate_mbps, audio: info.1 };
+        let mut live = LiveInfo {
+            room_title: joined.title,
+            server: server.to_string(),
+            video,
+            bitrate_mbps: settings.bitrate_mbps,
+            audio,
+            recording: Recording::Off,
+        };
         info!(
             "live: {} {}x{} -> {}x{} @ {} fps, {} ({:.1} Mbps), GPU {}, audio {}",
             live.video.capture_method,
@@ -214,10 +230,52 @@ impl Session {
             live.video.adapter,
             live.audio
         );
-        Ok((Session { control, room, ended, threads, events, meter: Mutex::new(Meter { at: now, started: now, prev: (0, 0, 0, 0) }) }, live))
+        let session = Session {
+            control,
+            room,
+            ended,
+            threads,
+            events,
+            meter: Mutex::new(Meter { at: now, started: now, prev: (0, 0, 0, 0) }),
+            screen: source == Source::Screen,
+            has_audio,
+        };
+        if settings.record && session.screen {
+            live.recording = session.set_recording(true).await;
+        }
+        Ok((session, live))
     }
 
-    async fn publish(room: &Room, control: &Arc<Control>, settings: &Settings, source: Source) -> Result<((VideoInfo, String), Vec<JoinHandle<()>>)> {
+    /// Starts or stops saving a copy of the stream on this computer, without interrupting the
+    /// stream. Returns what it's doing now (a failure to start is in there, and logged).
+    pub async fn set_recording(&self, on: bool) -> Recording {
+        if on && !self.screen {
+            warn!("not saving a copy: only the screen can be saved, not the test pattern");
+            return Recording::Off;
+        }
+        let (control, has_audio) = (self.control.clone(), self.has_audio);
+        // Starting creates a file, stopping waits for the file to be finished: off the runtime.
+        let done = tokio::task::spawn_blocking(move || {
+            if !on {
+                wincap::stop_recording(&control);
+            } else if let Err(e) = wincap::start_recording(&control, has_audio) {
+                warn!(error = %format!("{e:#}"), "couldn't start saving a copy of the stream");
+            }
+        })
+        .await;
+        if let Err(e) = done {
+            warn!(error = %e, "starting or stopping the saved copy");
+        }
+        wincap::recording(&self.control)
+    }
+
+    /// Returns what's being sent (video, sound in words, whether sound is on) and the threads.
+    async fn publish(
+        room: &Room,
+        control: &Arc<Control>,
+        settings: &Settings,
+        source: Source,
+    ) -> Result<((VideoInfo, String, bool), Vec<JoinHandle<()>>)> {
         let bitrate = settings.bitrate_bps();
         let (frame_tx, frame_rx) = mpsc::sync_channel::<wincap::EncodedFrame>(8);
         let (info, video_thread) = match source {
@@ -274,12 +332,14 @@ impl Session {
 
         // PC audio: everything, everything except Discord, or only chosen apps.
         let mut audio = "off".to_string();
+        let mut has_audio = false;
         if settings.audio && source == Source::Screen {
             let (audio_tx, audio_rx) = mpsc::sync_channel::<wincap::AudioChunk>(50);
             match wincap::start_audio(control.clone(), audio_tx, settings.audio_mode()) {
                 Ok((handle, what)) => {
                     threads.push(handle);
                     audio = what;
+                    has_audio = true;
                     let source = NativeAudioSource::new(
                         AudioSourceOptions { echo_cancellation: false, noise_suppression: false, auto_gain_control: false },
                         48_000,
@@ -330,7 +390,7 @@ impl Session {
                 }
             }
         }
-        Ok(((info, audio), threads))
+        Ok(((info, audio, has_audio), threads))
     }
 
     /// Frame rates and bitrate since the previous call.
@@ -352,6 +412,7 @@ impl Session {
             keyframes: s.keyframes.load(Ordering::Relaxed),
             dropped: now.3 - m.prev.3,
             seconds: m.started.elapsed().as_secs(),
+            recording: wincap::recording(&self.control),
         };
         m.prev = now;
         m.at = Instant::now();
@@ -380,7 +441,7 @@ impl Session {
         if let Err(e) = self.room.close().await {
             warn!("leaving the room: {e}");
         }
-        let threads = self.threads;
+        let (threads, control) = (self.threads, self.control);
         let joined = tokio::task::spawn_blocking(move || {
             for t in threads {
                 let name = t.thread().name().unwrap_or("capture").to_string();
@@ -388,6 +449,8 @@ impl Session {
                     error!("the {name} thread crashed");
                 }
             }
+            // After the capture threads: nothing more comes in, and the file can be ended.
+            wincap::stop_recording(&control);
         })
         .await;
         if let Err(e) = joined {

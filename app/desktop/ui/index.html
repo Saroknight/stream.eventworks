@@ -79,6 +79,10 @@
       </div>
       <p class="muted small" id="details"></p>
       <p class="muted small hint hidden" id="stillHint">Frame rate follows the screen: a still screen sends fewer frames.</p>
+      <div class="rec hidden" id="recRow">
+        <span class="small" id="recText"></span>
+        <button class="btn sm ghost" id="recBtn"></button>
+      </div>
       <button class="btn big stop" id="stopBtn">Stop streaming</button>
       <div class="row">
         <button class="btn sm ghost hidden" id="watchBtn">Watch in browser</button>
@@ -151,6 +155,7 @@
         <div id="appsList"></div>
       </div>
       <label class="toggle"><input type="checkbox" data-s="cursor"> Show mouse cursor</label>
+      <label class="toggle hidden" id="recordRow"><input type="checkbox" id="recordBox"> Save a copy on this computer (Videos/Streamroom)</label>
       <div class="apply hidden" id="applyRow">
         <span class="muted small">Changes apply the next time you go live.</span>
         <button class="btn sm" id="applyBtn">Apply now</button>

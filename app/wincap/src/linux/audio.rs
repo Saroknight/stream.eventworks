@@ -23,11 +23,13 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 
 use super::launch::{launch, next_error};
+use super::record;
 use crate::{AudioChunk, AudioMode, Control};
 
-const RATE: u32 = 48_000;
-const CHANNELS: u16 = 2;
-const CHUNK: usize = (RATE / 100) as usize * CHANNELS as usize;
+pub(super) const RATE: u32 = 48_000;
+pub(super) const CHANNELS: u16 = 2;
+/// Samples (all channels) in one 10 ms chunk.
+pub(super) const CHUNK: usize = (RATE / 100) as usize * CHANNELS as usize;
 /// `pw-dump` answers in a few milliseconds; longer means PipeWire is stuck.
 const PW_DUMP_TIMEOUT: Duration = Duration::from_secs(2);
 /// Per-app capture failing this many times in a row: share no sound for a while.
@@ -243,6 +245,8 @@ fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p:
         while pending.len() >= CHUNK {
             let samples: Vec<i16> = pending.drain(..CHUNK).collect();
             control.stats.audio_chunks.fetch_add(1, Ordering::Relaxed);
+            // Saved before the network side, which may drop it.
+            record::audio(control, &samples);
             match tx.try_send(AudioChunk { samples, sample_rate: RATE, channels: CHANNELS }) {
                 Ok(()) | Err(TrySendError::Full(_)) => {}
                 Err(TrySendError::Disconnected(_)) => return Ok(()),
