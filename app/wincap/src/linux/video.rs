@@ -124,7 +124,11 @@ const SQUARE: &str = "capssetter caps=\"video/x-raw,pixel-aspect-ratio=(fraction
 /// The screen part of the pipeline.
 enum Screen {
     Portal(portal::PortalStream),
-    X11 { cursor: bool },
+    /// `size`: the X screen's, when it could be read before starting.
+    X11 {
+        cursor: bool,
+        size: Option<(u32, u32)>,
+    },
 }
 
 impl Screen {
@@ -164,14 +168,16 @@ impl Screen {
                 p.fd.as_raw_fd(),
             ),
             // ximagesrc runs at a fixed rate, 25 fps unless told otherwise.
-            Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! video/x-raw,framerate={fps}/1 ! {SQUARE}"),
+            Screen::X11 { cursor, .. } => {
+                format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! video/x-raw,framerate={fps}/1 ! {SQUARE}")
+            }
         }
     }
-    /// The screen's shape as the portal reported it (X11: unknown until it runs).
+    /// The screen's shape, as the portal reported it or as X11 says.
     fn size(&self) -> Option<(u32, u32)> {
         match self {
             Screen::Portal(p) => p.size.filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| (w as u32, h as u32)),
-            Screen::X11 { .. } => None,
+            Screen::X11 { size, .. } => size.filter(|(w, h)| *w > 0 && *h > 0),
         }
     }
     fn method(&self) -> &'static str {
@@ -434,13 +440,26 @@ fn start_encoders(screen: &Screen, opts: &VideoOptions, control: &Arc<Control>) 
 
 fn open_screen(control: &Arc<Control>, opts: &VideoOptions, remember: bool) -> Result<Screen> {
     if !use_portal() {
-        return Ok(Screen::X11 { cursor: opts.cursor });
+        return Ok(Screen::X11 { cursor: opts.cursor, size: x11_size(control) });
     }
     let mut p = portal::open(control.clone(), opts.cursor, remember)?;
     if p.serial.is_none() {
         p.serial = lookup_serial(&p, control);
     }
     Ok(Screen::Portal(p))
+}
+
+/// The X screen's size: ximagesrc reports it in its caps once it has opened the display.
+/// Without it the scaler picks the output width, which can be odd (1365x720 from a 3640x1920
+/// desktop), and x264 refuses odd widths.
+fn x11_size(control: &Control) -> Option<(u32, u32)> {
+    let src = gst::ElementFactory::make("ximagesrc").build().ok()?;
+    // A live source: Paused opens the display without waiting for a frame.
+    let size = src.set_state(gst::State::Paused).ok().and_then(|_| src.static_pad("src")).and_then(|pad| caps_size(&pad.query_caps(None)));
+    if let Err(e) = src.set_state(gst::State::Null) {
+        control.report_error(format!("stopping the X11 screen size check: {e}"));
+    }
+    size
 }
 
 /// What the desktop handed over, for troubleshooting a failed start.
