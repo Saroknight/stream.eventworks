@@ -336,3 +336,7 @@ Not started unless the owner picks them:
    opening the file for every line), typed sound setting `AudioChoice` (same saved values),
    Linux asks for a keyframe when a frame is dropped, Linux per-app sound fallback shares
    silence instead of all PC audio.
+13. Linux 0.4.13: keyframe requests after dropped frames at most once a second, `log`-crate
+   warnings (LiveKit, WebRTC, Tauri) in the log file, the unused capture error list removed,
+   DMA-BUF use documented (it was already on with VA-API). Windows still has the log bridge and
+   error-list change unreleased (no Windows bump).
