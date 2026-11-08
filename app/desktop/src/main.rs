@@ -21,8 +21,9 @@ use streamroom_core::api::parse_launch;
 use streamroom_core::{log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LiveInfo, Monitor, Session, Settings, SignedOut, Source};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent, Wry};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry};
 use tauri_plugin_deep_link::DeepLinkExt;
+use tracing::{info, warn};
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -128,7 +129,7 @@ fn set_account(app: &AppHandle, a: Option<Account>) {
         match &a {
             Some(a) => {
                 if let Err(e) = account::save(&dir, a) {
-                    log::info(&format!("couldn't save the sign-in: {e:#}"));
+                    warn!("couldn't save the sign-in: {e:#}");
                 }
             }
             None => account::forget(&dir),
@@ -148,7 +149,7 @@ fn api(app: &AppHandle) -> Result<Api, String> {
 /// Turns an error into text for the window; a revoked key also signs this PC out.
 fn explain(app: &AppHandle, e: anyhow::Error) -> String {
     if e.downcast_ref::<SignedOut>().is_some() {
-        log::info("the server no longer accepts this PC's key: signing out");
+        info!("the server no longer accepts this PC's key: signing out");
         set_account(app, None);
     }
     format!("{e:#}")
@@ -180,7 +181,7 @@ async fn begin(app: AppHandle, target: Target) {
             }
             Ok(api) => {
                 set_status(&app, Status::Connecting { server: api.server.clone() });
-                log::info(&format!("going live in room {id} on {}", api.server));
+                info!("going live in room {id} on {}", api.server);
                 match api.app_token(id).await {
                     Ok(joined) => Session::start_joined(&api.server, joined, &settings, Source::Screen).await,
                     Err(e) => Err(e),
@@ -194,7 +195,7 @@ async fn begin(app: AppHandle, target: Target) {
             set_status(&app, Status::Live { info, since: now_ms() });
         }
         Err(e) => {
-            log::info(&format!("could not go live: {e:#}"));
+            warn!("could not go live: {e:#}");
             let message = explain(&app, e);
             if let (Target::Room(id), Ok(api)) = (&target, api(&app)) {
                 api.report("app-error", &format!("could not go live: {message}"), Some(id)).await;
@@ -237,15 +238,15 @@ async fn launch(app: AppHandle, l: Launch) -> Result<(), String> {
         match api.pair(&code, current.as_ref(), &account::device_name()).await {
             Ok(a) => {
                 if current.as_ref() != Some(&a) {
-                    log::info(&format!("signed in to {} as {}", a.server, a.user_name));
+                    info!("signed in to {} as {}", a.server, a.user_name);
                 }
                 set_account(&app, Some(a));
             }
             // An old or reused code is fine if we're already signed in to that server.
-            Err(e) if signed_in_here => log::info(&format!("sign-in code not used ({e:#}); keeping the current sign-in")),
+            Err(e) if signed_in_here => info!("sign-in code not used ({e:#}); keeping the current sign-in"),
             Err(e) => {
                 let message = format!("{e:#}");
-                log::info(&format!("sign-in with the link failed: {message}"));
+                warn!("sign-in with the link failed: {message}");
                 set_status(&app, Status::Error { message: message.clone() });
                 return Err(message);
             }
@@ -278,7 +279,7 @@ fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
             }
             *last = Some((a.clone(), std::time::Instant::now()));
         }
-        log::info(&format!("received link: {}", redact(&a)));
+        info!("received link: {}", redact(&a));
         match parse_launch(&a) {
             Ok(l) => {
                 let app = app.clone();
@@ -287,7 +288,7 @@ fn handle_links(app: &AppHandle, args: impl IntoIterator<Item = String>) {
                 });
             }
             Err(e) => {
-                log::info(&format!("couldn't read that link: {e:#}"));
+                warn!("couldn't read that link: {e:#}");
                 show_main(app);
                 set_status(app, Status::Error { message: format!("{e:#}") });
             }
@@ -394,7 +395,7 @@ async fn go_live(app: AppHandle, room: String) -> Result<(), String> {
 async fn create_room(app: AppHandle, title: String) -> Result<(), String> {
     let api = api(&app)?;
     let id = api.create_room(title.trim()).await.map_err(|e| explain(&app, e))?;
-    log::info(&format!("started room {id}"));
+    info!("started room {id}");
     begin(app, Target::Room(id)).await;
     Ok(())
 }
@@ -438,7 +439,7 @@ async fn sign_out(app: AppHandle) -> Result<(), String> {
     if let Ok(api) = api(&app) {
         let _ = api.signout().await; // best effort: the key is forgotten here either way
     }
-    log::info("signed out");
+    info!("signed out");
     set_account(&app, None);
     Ok(())
 }
@@ -509,7 +510,7 @@ async fn refresh_update(app: &AppHandle) -> anyhow::Result<Option<update::Availa
     let found = update::check().await?;
     *app.state::<AppState>().update.lock().unwrap_or_else(PoisonError::into_inner) = found.clone();
     if let Err(e) = app.emit("update", found.clone()) {
-        log::info(&format!("couldn't tell the window about the update check: {e}"));
+        warn!("couldn't tell the window about the update check: {e}");
     }
     Ok(found)
 }
@@ -518,7 +519,7 @@ async fn refresh_update(app: &AppHandle) -> anyhow::Result<Option<update::Availa
 #[tauri::command]
 async fn check_update(app: AppHandle) -> Result<Option<update::Available>, String> {
     refresh_update(&app).await.map_err(|e| {
-        log::info(&format!("update check failed: {e:#}"));
+        warn!("update check failed: {e:#}");
         "Couldn't check for updates. Check the internet connection and try again.".to_string()
     })
 }
@@ -529,7 +530,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         return Err("Stop streaming first, then update.".into());
     }
     let a = app.state::<AppState>().update.lock().unwrap_or_else(PoisonError::into_inner).clone().ok_or("No update available.")?;
-    log::info(&format!("installing update {}", a.version));
+    info!("installing update {}", a.version);
     update::install(&a).await.map_err(|e| format!("{e:#}"))?;
     app.exit(0);
     Ok(())
@@ -546,7 +547,7 @@ fn main() {
         // ignored (see handle_links).
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             show_main(app);
-            log::info(&format!("second launch with {} argument(s)", argv.len().saturating_sub(1)));
+            info!("second launch with {} argument(s)", argv.len().saturating_sub(1));
             handle_links(app, argv.into_iter().skip(1));
         }))
         .plugin(tauri_plugin_deep_link::init())
@@ -580,15 +581,13 @@ fn main() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
-            if let Ok(dir) = app.path().app_log_dir() {
-                log::set_path(dir.join("streamroom-live.log"));
-            }
-            log::info(&format!("---- Streamroom Live {} starting", env!("CARGO_PKG_VERSION")));
+            log::init(app.path().app_log_dir().ok().map(|dir| dir.join("streamroom-live.log")));
+            info!("---- Streamroom Live {} starting", env!("CARGO_PKG_VERSION"));
             *app.state::<AppState>().settings.lock().unwrap_or_else(PoisonError::into_inner) = load_settings(&handle);
             if let Some(dir) = config_dir(&handle) {
                 let saved = account::load(&dir);
                 if let Some(a) = &saved {
-                    log::info(&format!("signed in to {} as {}", a.server, a.user_name));
+                    info!("signed in to {} as {}", a.server, a.user_name);
                 }
                 *app.state::<AppState>().account.lock().unwrap_or_else(PoisonError::into_inner) = saved;
             }
@@ -661,7 +660,7 @@ fn main() {
                         }
                     };
                     if let Some(reason) = ended {
-                        log::info(&format!("session ended: {reason}"));
+                        info!("session ended: {reason}");
                         if reason.starts_with("Disconnected") {
                             let room = match h.state::<AppState>().target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
                                 Some(Target::Room(id)) => Some(id.clone()),
@@ -683,7 +682,7 @@ fn main() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 loop {
                     if let Err(e) = refresh_update(&h).await {
-                        log::info(&format!("update check failed: {e:#}"));
+                        warn!("update check failed: {e:#}");
                     }
                     tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
                 }
@@ -699,6 +698,11 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Streamroom Live");
+        .build(tauri::generate_context!())
+        .expect("error while running Streamroom Live")
+        .run(|_, event| {
+            if let RunEvent::Exit = event {
+                log::flush();
+            }
+        });
 }

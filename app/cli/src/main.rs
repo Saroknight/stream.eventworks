@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use streamroom_core::api::parse_launch;
 use streamroom_core::{log, Api, Launch, Session, Settings, Source};
+use tracing::{error, info};
 
 const HELP: &str = "Streamroom Live (console)
 
@@ -35,6 +36,7 @@ fn prompt(question: &str) -> Result<String> {
 }
 
 fn main() {
+    log::init(None);
     streamroom_core::init();
     let result = std::panic::catch_unwind(|| {
         tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(anyhow::Error::from).and_then(|rt| rt.block_on(run()))
@@ -43,11 +45,12 @@ fn main() {
         Ok(Ok(())) => false,
         Ok(Err(e)) => {
             eprintln!("\nError: {e:#}");
-            log::info(&format!("Error: {e:#}"));
+            error!("Error: {e:#}");
             true
         }
         Err(_) => true,
     };
+    log::flush();
     if failed {
         eprintln!("\nLog: {}", log::path().display());
         let _ = prompt("Press Enter to close");
@@ -145,11 +148,11 @@ async fn run() -> Result<()> {
         let _ = std::io::stdout().flush();
         ticks += 1;
         if ticks.is_multiple_of(10) {
-            log::info(&format!("stats: {s:?}"));
+            info!("stats: {s:?}");
         }
     };
     println!("\n\n{reason} Shutting down...");
-    log::info(&reason);
+    info!("{reason}");
     session.stop().await;
     if let Some(api) = signed_in {
         let _ = api.signout().await;

@@ -433,7 +433,10 @@ fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &
     match tx.try_send(frame) {
         Ok(()) => true,
         Err(TrySendError::Full(_)) => {
+            // The network side is behind. Dropping a frame breaks the decoder's chain, so ask
+            // for a fresh keyframe (as on Windows).
             s.dropped.fetch_add(1, Ordering::Relaxed);
+            control.request_keyframe();
             true
         }
         Err(TrySendError::Disconnected(_)) => false,

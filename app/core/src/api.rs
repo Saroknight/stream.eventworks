@@ -8,6 +8,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing::warn;
 
 use crate::link::{self, AppLink, Joined, TokenResponse};
 
@@ -182,7 +183,7 @@ impl Api {
     pub async fn report(&self, kind: &str, message: &str, room: Option<&str>) {
         let body = json!({ "kind": kind, "message": message, "room": room, "version": env!("CARGO_PKG_VERSION") });
         if let Err(e) = self.call(reqwest::Method::POST, "/health/report", Some(body)).await {
-            crate::log::info(&format!("couldn't report \"{kind}\" to the server: {e:#}"));
+            warn!("couldn't report \"{kind}\" to the server: {e:#}");
         }
     }
 }

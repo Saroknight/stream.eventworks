@@ -6,7 +6,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use streamroom_core::{log, Account};
+use streamroom_core::Account;
+use tracing::warn;
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join("account.dat")
@@ -17,7 +18,7 @@ pub fn load(config_dir: &Path) -> Option<Account> {
     let raw = std::fs::read(&p).ok()?;
     // Older versions wrote it readable by everyone (the default umask): tighten it.
     if let Err(e) = make_private(&p) {
-        log::info(&format!("couldn't restrict who can read {}: {e}", p.display()));
+        warn!("couldn't restrict who can read {}: {e}", p.display());
     }
     let plain = unprotect(&raw).ok()?;
     serde_json::from_slice(&plain).ok()
@@ -41,7 +42,7 @@ pub fn forget(config_dir: &Path) {
     let p = path(config_dir);
     if let Err(e) = std::fs::remove_file(&p) {
         if e.kind() != std::io::ErrorKind::NotFound {
-            log::info(&format!("couldn't delete the sign-in {}: {e}", p.display()));
+            warn!("couldn't delete the sign-in {}: {e}", p.display());
         }
     }
 }

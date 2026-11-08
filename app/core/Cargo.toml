@@ -16,6 +16,9 @@ rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 url.workspace = true
 wincap = { path = "../wincap" }
 openh264 = { version = "0.9", optional = true }

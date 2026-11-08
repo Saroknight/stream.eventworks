@@ -7,6 +7,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 pub const REPO: &str = "Saroknight/stream.eventworks";
 #[cfg(not(target_os = "linux"))]
@@ -121,7 +122,7 @@ fn run_after_exit(setup: &std::path::Path) -> Result<()> {
         bail!("the update wasn't installed (password cancelled, or pacman refused it)");
     }
     if let Err(e) = std::fs::remove_file(setup) {
-        streamroom_core::log::info(&format!("couldn't delete the downloaded update {}: {e}", setup.display()));
+        warn!("couldn't delete the downloaded update {}: {e}", setup.display());
     }
     // Start the new version once this one has exited.
     let pid = std::process::id();
