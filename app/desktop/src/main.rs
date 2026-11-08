@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use streamroom_core::api::parse_launch;
-use streamroom_core::{log, now_ms, Account, Api, AppLink, Launch, LiveInfo, Monitor, Session, Settings, SignedOut, Source};
+use streamroom_core::{log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LiveInfo, Monitor, Session, Settings, SignedOut, Source};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent, Wry};
@@ -338,7 +338,7 @@ fn load_settings(app: &AppHandle) -> Settings {
     let mut s: Settings = serde_json::from_str(&text).unwrap_or_default();
     // Installs from before per-app audio keep sharing all PC audio until changed in Settings.
     if !text.contains("\"audio_mode\"") {
-        s.audio_mode = "all".into();
+        s.audio_mode = AudioChoice::All;
     }
     s
 }

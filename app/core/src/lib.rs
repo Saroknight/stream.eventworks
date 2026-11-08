@@ -39,6 +39,21 @@ pub fn init() {
     }
 }
 
+/// The sound setting as saved. The names are what `settings.json` and the window use
+/// ("except_discord", "apps", "all").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioChoice {
+    /// Only `Settings::audio_apps`.
+    Apps,
+    All,
+    /// Also what an unknown value reads as, so one bad value doesn't reset every setting.
+    /// (`serde(other)` has to be on the last variant.)
+    #[default]
+    #[serde(other)]
+    ExceptDiscord,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -49,8 +64,8 @@ pub struct Settings {
     /// Monitor index (see `list_monitors`), 0 = primary.
     pub monitor: u32,
     pub audio: bool,
-    /// Which sound to share: "except_discord" (default), "apps" (only `audio_apps`) or "all".
-    pub audio_mode: String,
+    /// Which sound to share.
+    pub audio_mode: AudioChoice,
     /// Exe names for "apps", e.g. ["eldenring.exe"].
     pub audio_apps: Vec<String>,
     pub cursor: bool,
@@ -64,7 +79,7 @@ impl Default for Settings {
             bitrate_mbps: 8.0,
             monitor: 0,
             audio: true,
-            audio_mode: "except_discord".into(),
+            audio_mode: AudioChoice::ExceptDiscord,
             audio_apps: Vec::new(),
             cursor: true,
         }
@@ -73,11 +88,11 @@ impl Default for Settings {
 
 impl Settings {
     pub fn audio_mode(&self) -> wincap::AudioMode {
-        match self.audio_mode.as_str() {
-            "all" => wincap::AudioMode::All,
-            "apps" if !self.audio_apps.is_empty() => wincap::AudioMode::Apps(self.audio_apps.clone()),
-            "apps" => wincap::AudioMode::All,
-            _ => wincap::AudioMode::ExceptDiscord,
+        match self.audio_mode {
+            AudioChoice::All => wincap::AudioMode::All,
+            AudioChoice::Apps if !self.audio_apps.is_empty() => wincap::AudioMode::Apps(self.audio_apps.clone()),
+            AudioChoice::Apps => wincap::AudioMode::All,
+            AudioChoice::ExceptDiscord => wincap::AudioMode::ExceptDiscord,
         }
     }
 
@@ -447,4 +462,25 @@ pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
         bytes as f64 * 8.0 / seconds as f64 / 1e6,
         if frames == 0 { "\nNo frames arrived: the screen stream started but sent nothing." } else { "" }
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioChoice, Settings};
+
+    #[test]
+    fn audio_choice_keeps_the_saved_names() {
+        for (choice, name) in [(AudioChoice::ExceptDiscord, "except_discord"), (AudioChoice::Apps, "apps"), (AudioChoice::All, "all")] {
+            let json = format!("\"{name}\"");
+            assert_eq!(serde_json::to_string(&choice).unwrap(), json);
+            assert_eq!(serde_json::from_str::<AudioChoice>(&json).unwrap(), choice);
+        }
+    }
+
+    #[test]
+    fn unknown_audio_choice_keeps_the_other_settings() {
+        let s: Settings = serde_json::from_str(r#"{"fps": 30, "audio_mode": "something_new"}"#).unwrap();
+        assert_eq!(s.audio_mode, AudioChoice::ExceptDiscord);
+        assert_eq!(s.fps, 30);
+    }
 }
