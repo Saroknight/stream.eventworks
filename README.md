@@ -20,6 +20,9 @@ browser / Streamroom Live ──WebRTC──▶ LiveKit (SFU) ──WebRTC──
            └── sign-in, rooms ──────▶ Streamroom server (Node)
 ```
 
+The full picture, with a diagram and the sign-in and go-live steps, is in
+[docs/architecture.md](docs/architecture.md).
+
 ## Access
 
 | Who | How |
@@ -133,6 +136,7 @@ tests/e2e.mjs        end-to-end test (CI on every push; npm run test:e2e)
 tests/relay.mjs      port 443 fallback test (CI, run by hand, after a real setup.sh install)
 app/                 Streamroom Live (Windows and Linux app, Rust + Tauri), see app/README.md
 deploy/              Lightsail script, Linux setup, Caddy, systemd, LiveKit config
+docs/                how it works: architecture diagram, steps, passes and ports
 CLAUDE.md            notes for working on the code (architecture, CI, releasing, lessons learned)
 ```
 
