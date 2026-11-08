@@ -15,6 +15,7 @@ on:
       - "!app/packaging/**"
       - "!app/release/linux"
       - "!app/README.md"
+      - "!app/CLAUDE.md"
       - ".github/workflows/app-windows.yml"
   workflow_dispatch:
 
