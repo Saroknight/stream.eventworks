@@ -162,10 +162,12 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
 - Logs: Linux `~/.local/share/click.eventworks.streamroom/logs/streamroom-live.log`, Windows
   under `%LOCALAPPDATA%\click.eventworks.streamroom\logs\` (the CLI: `streamroom-live.log` in the
   temp folder). Code logs with `tracing`; `core::log::init` sends it to the file through a
-  background writer (our crates from `info`, others from `warn`), and `log::flush()` must run
-  before exiting (the app does it on `RunEvent::Exit`, the CLI before `process::exit`) or the
-  last lines are lost. `Control::report_error` logs too, so its messages aren't logged again.
-- A dropped encoded frame (the network side is behind) requests a keyframe on both platforms.
+  background writer (our crates from `info`, others from `warn`, including `log`-crate users
+  like LiveKit through the `tracing-log` bridge), and `log::flush()` must run before exiting
+  (the app does it on `RunEvent::Exit`, the CLI before `process::exit`) or the last lines are
+  lost. Capture threads report problems with `Control::report_error`, which just logs them.
+- A dropped encoded frame (the network side is behind) requests a keyframe on both platforms;
+  on Linux at most once a second (`KeyframeLimit`), since keyframes are big.
 
 ## Build, run, test
 

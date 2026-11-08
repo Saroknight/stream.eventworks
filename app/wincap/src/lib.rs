@@ -93,8 +93,6 @@ pub struct Control {
     /// 0 = no change requested.
     pub bitrate_request: AtomicU32,
     pub stats: Stats,
-    /// Errors from the capture threads, for the app to show and log.
-    pub errors: Mutex<Vec<String>>,
     /// Why video capture stopped on its own, if it did (the first reason given).
     stopped: Mutex<Option<String>>,
 }
@@ -118,12 +116,9 @@ impl Control {
     pub fn request_keyframe(&self) {
         self.keyframe_requested.store(true, Ordering::Relaxed);
     }
+    /// Logs a problem in a capture thread.
     pub fn report_error(&self, msg: String) {
         tracing::warn!("{msg}");
-        self.errors.lock().unwrap_or_else(PoisonError::into_inner).push(msg);
-    }
-    pub fn take_errors(&self) -> Vec<String> {
-        std::mem::take(&mut *self.errors.lock().unwrap_or_else(PoisonError::into_inner))
     }
     /// Video capture stopped on its own (the screen share ended, the encoder failed): records
     /// why for the app and stops everything.
@@ -213,6 +208,5 @@ mod tests {
         control.report_stopped("a later, knock-on failure".into());
         assert_eq!(control.stopped_reason().as_deref(), Some("the screen share ended"));
         assert!(control.stop.load(Ordering::Relaxed));
-        assert_eq!(control.take_errors().len(), 2, "both are still logged");
     }
 }

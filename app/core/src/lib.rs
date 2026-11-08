@@ -363,8 +363,6 @@ impl Session {
         if let Some(m) = self.ended.lock().unwrap_or_else(PoisonError::into_inner).clone() {
             return Some(m);
         }
-        // Already logged when reported; drained so they don't pile up.
-        self.control.take_errors();
         if let Some(why) = self.control.stopped_reason() {
             let msg = format!("Screen capture stopped: {why}");
             *self.ended.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg.clone());

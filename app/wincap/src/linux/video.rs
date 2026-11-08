@@ -372,6 +372,7 @@ fn stream(run: Running, encoder: Encoder, control: &Control, tx: &SyncSender<Enc
     let Running { pipeline, sink, enc, first } = run;
     let bus = pipeline.bus();
     let mut next = Some(first);
+    let mut keyframe_after_drop = KeyframeLimit::default();
     while !control.stop.load(Ordering::Relaxed) {
         if let Some(msg) = bus.as_ref().and_then(|b| b.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])) {
             let why = match PipelineError::from_message(&msg) {
@@ -383,9 +384,37 @@ fn stream(run: Running, encoder: Encoder, control: &Control, tx: &SyncSender<Enc
         }
         apply_requests(control, &sink, &enc, encoder);
         let Some(sample) = next.take().or_else(|| sink.try_pull_sample(gst::ClockTime::from_mseconds(50))) else { continue };
-        if !send(&sample, &pipeline, control, tx, out) {
-            return;
+        match send(&sample, &pipeline, control, tx, out) {
+            Sent::Delivered => {}
+            // Dropping a frame breaks the decoder's chain, so ask for a fresh keyframe (as on
+            // Windows), but not on every drop: keyframes are big and the network is behind.
+            Sent::Dropped => {
+                if keyframe_after_drop.allow(Instant::now()) {
+                    control.request_keyframe();
+                }
+            }
+            Sent::Closed => return,
         }
+    }
+}
+
+/// Drops ask for a keyframe at most this often.
+const KEYFRAME_AFTER_DROP_GAP: Duration = Duration::from_secs(1);
+
+/// Spaces out keyframe requests caused by dropped frames.
+#[derive(Default)]
+struct KeyframeLimit {
+    last: Option<Instant>,
+}
+
+impl KeyframeLimit {
+    /// Whether a drop at `now` may ask for a keyframe (and if so, counts it as asked).
+    fn allow(&mut self, now: Instant) -> bool {
+        if self.last.is_some_and(|t| now.saturating_duration_since(t) < KEYFRAME_AFTER_DROP_GAP) {
+            return false;
+        }
+        self.last = Some(now);
+        true
     }
 }
 
@@ -413,10 +442,20 @@ fn since_capture(sample: &gst::Sample, pipeline: &gst::Pipeline) -> Option<Durat
     Some(Duration::from_nanos(age.nseconds()))
 }
 
-/// Sends one encoded frame on. Returns false once nobody is receiving.
-fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> bool {
-    let Some(buf) = sample.buffer() else { return true };
-    let Ok(map) = buf.map_readable() else { return true };
+/// What became of an encoded frame.
+enum Sent {
+    /// Handed on (or there was nothing to hand on).
+    Delivered,
+    /// Dropped: the network side is behind.
+    Dropped,
+    /// Nobody is receiving any more.
+    Closed,
+}
+
+/// Sends one encoded frame on.
+fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> Sent {
+    let Some(buf) = sample.buffer() else { return Sent::Delivered };
+    let Ok(map) = buf.map_readable() else { return Sent::Delivered };
     let keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
     let (width, height) = sample.caps().and_then(caps_size).unwrap_or(out);
     let s = &control.stats;
@@ -431,15 +470,12 @@ fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &
     let capture_unix_us = now_us() - i64::from(latency_us);
     let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us, encode_latency_us: latency_us };
     match tx.try_send(frame) {
-        Ok(()) => true,
+        Ok(()) => Sent::Delivered,
         Err(TrySendError::Full(_)) => {
-            // The network side is behind. Dropping a frame breaks the decoder's chain, so ask
-            // for a fresh keyframe (as on Windows).
             s.dropped.fetch_add(1, Ordering::Relaxed);
-            control.request_keyframe();
-            true
+            Sent::Dropped
         }
-        Err(TrySendError::Disconnected(_)) => false,
+        Err(TrySendError::Disconnected(_)) => Sent::Closed,
     }
 }
 
@@ -453,5 +489,22 @@ pub fn list_monitors() -> Vec<crate::Monitor> {
         ]
     } else {
         vec![crate::Monitor { index: 0, name: "Whole desktop".into(), width: 0, height: 0, primary: true, gpu: String::new() }]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyframeLimit, KEYFRAME_AFTER_DROP_GAP};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn drops_ask_for_a_keyframe_at_most_once_a_gap() {
+        let start = Instant::now();
+        let mut limit = KeyframeLimit::default();
+        assert!(limit.allow(start), "the first drop asks");
+        assert!(!limit.allow(start + Duration::from_millis(10)), "a drop right after doesn't");
+        assert!(!limit.allow(start + KEYFRAME_AFTER_DROP_GAP - Duration::from_millis(1)));
+        assert!(limit.allow(start + KEYFRAME_AFTER_DROP_GAP), "one gap later it asks again");
+        assert!(!limit.allow(start + KEYFRAME_AFTER_DROP_GAP + Duration::from_millis(500)), "counted from the last ask");
     }
 }
