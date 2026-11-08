@@ -74,7 +74,7 @@ app/                 Streamroom Live (see below)
 | Crate | What |
 |---|---|
 | `core/` | Server API client (`api.rs`: pair, me, rooms, create/end room, app token, sign out, report), app link parsing (`parse_launch`), `Settings`, `Session` (connect to LiveKit, publish video + audio), `capture_test`, logging |
-| `wincap/` | Capture + encode. Windows: `capture.rs` (DXGI duplication), `convert.rs`/`d3d.rs` (GPU NV12), `encoder.rs` (Media Foundation H.264), `audio.rs` (WASAPI, per-app process loopback), `pipeline.rs`, `cursor.rs`. Linux: `src/linux/` (`portal.rs`, `video.rs`, `audio.rs`, `launch.rs` (shared GStreamer pipeline setup, shutdown, bus errors), `mod.rs`) |
+| `wincap/` | Capture + encode. Windows: `capture.rs` (DXGI duplication), `convert.rs`/`d3d.rs` (GPU NV12), `encoder.rs` (Media Foundation H.264), `audio.rs` (WASAPI, per-app process loopback), `pipeline.rs`, `cursor.rs`. Linux: `src/linux/` (`portal.rs` (portal session, PipeWire node lookup), `video.rs` (pipeline, start, stream), `encoder.rs` (`Encoder` enum + settings), `gate.rs` (`FrameGate`), `audio.rs`, `launch.rs` (shared GStreamer pipeline setup, shutdown, bus errors), `mod.rs`) |
 | `desktop/` | The Tauri app: `main.rs` (commands, deep links, single instance, tray, account), `account.rs` (key storage: DPAPI on Windows, a 0600 file on Linux), `update.rs` (self-updater), `ui/` (plain HTML/JS/CSS window) |
 | `cli/` | `streamroom-live-cli`, same engine from a terminal (troubleshooting, CI e2e, `--capture-test`) |
 | `packaging/arch/` | PKGBUILD + .desktop file (registers `x-scheme-handler/streamroom`) |
@@ -263,6 +263,11 @@ app releases don't need one (except changes to `appinfo.js`/download routes).
 - **KDE can report pixel aspect 2147483647:1**, which overflows scalers: force square pixels
   with `capssetter` and spell out the output width and height.
 - **GNOME's portal doesn't report the PipeWire serial;** look it up on the portal connection.
+- **Encoders shift output timestamps by 1000 hours** (so decode times never go negative). To
+  compare an encoded frame's PTS with the pipeline's running time, convert it with the sample's
+  segment (`to_running_time`), or every latency comes out negative.
+- **x264 refuses odd widths.** On X11 the screen size is read first (ximagesrc caps in Paused)
+  so the output width is spelled out and even; left to the scaler it picked 1365x720.
 - **A failed GStreamer pipeline must be set to Null,** or it keeps threads and PipeWire streams.
 - **`set_state(Playing)` failing hides the reason:** read the Error message off the bus.
 - **Browser hand-off to the app:** `beforeunload` fires on `streamroom://` navigation (see Page
@@ -311,3 +316,5 @@ Not started unless the owner picks them:
 10. Windows 0.4.4 / Linux 0.4.10: unwrap lint for every crate, typed "video stopped" reason
    (`Control::report_stopped`), Linux device names from the kernel host name, dropped errors
    logged.
+11. Linux 0.4.11: real capture-to-encoded time (was always 0 ms), even output width on X11,
+   typed error for the PipeWire node lookup, `video.rs` split into `encoder.rs`/`gate.rs`/`portal.rs`.
