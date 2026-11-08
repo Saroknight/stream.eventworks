@@ -127,8 +127,13 @@ fn pipeline_text(screen: &Screen, target: &str, enc: Encoder, opts: &VideoOption
         // The frame rate is capped by `FrameGate` at the encoder's input, not here: PipeWire
         // screens have a variable rate (0/1), so videorate's max-rate lets everything through,
         // and a fixed framerate in the caps makes GNOME's screen stream fail to negotiate.
+        // The encoder still has to be told the rate: it splits its bitrate by the frame rate in
+        // the caps, and a screen's variable rate comes with a max-framerate (about 360 fps on
+        // GNOME), so each frame got a sixth of its share (16 Mbps came out as 1.5). capssetter
+        // only changes what goes downstream, so it doesn't upset negotiation with the screen.
         "{src} ! queue max-size-buffers=2 leaky=downstream ! \
          {convert} ! \
+         capssetter caps=\"video/x-raw,framerate=(fraction){fps}/1\" ! \
          {element} name=enc {settings} ! h264parse config-interval=-1 ! \
          video/x-h264,stream-format=byte-stream,alignment=au ! \
          appsink name=sink sync=false max-buffers=4 drop=true",
@@ -505,8 +510,23 @@ pub fn list_monitors() -> Vec<crate::Monitor> {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyframeLimit, KEYFRAME_AFTER_DROP_GAP};
+    use super::{pipeline_text, Encoder, KeyframeLimit, Screen, KEYFRAME_AFTER_DROP_GAP};
     use std::time::{Duration, Instant};
+
+    /// The encoder splits its bitrate by the frame rate in the caps. Screens report a variable
+    /// rate (0/1) with a max-framerate (about 360 fps seen on GNOME), and the encoder used that:
+    /// at 60 fps delivered, 16 Mbps came out as 1.5 Mbps.
+    #[test]
+    fn the_encoder_is_told_the_capped_frame_rate() {
+        let screen = Screen::X11 { cursor: true, size: Some((2560, 1440)) };
+        let opts = crate::VideoOptions { fps: 60, ..Default::default() };
+        for encoder in Encoder::ALL {
+            let text = pipeline_text(&screen, "", encoder, &opts);
+            let before_encoder = text.split(" name=enc ").next().unwrap_or_default();
+            let last_link = before_encoder.rsplit('!').nth(1).unwrap_or_default();
+            assert!(last_link.contains("framerate=(fraction)60/1"), "{encoder:?}: {last_link}");
+        }
+    }
 
     #[test]
     fn drops_ask_for_a_keyframe_at_most_once_a_gap() {

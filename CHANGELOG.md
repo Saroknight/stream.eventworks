@@ -2,6 +2,10 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Linux 0.4.16: the video now uses the bitrate you pick. The encoder was told the screen's
+   maximum rate (about 360 fps) instead of the capped one, so it spread the bitrate over six times
+   more frames than it got: 16 Mbps came out as 1–2 Mbps, in the stream and in saved copies
+   (capture test on full-screen video: 1.5 → 11.3 Mbps).
 - Linux 0.4.15: fixed going live a second time without restarting the app (stuck on
    Connecting, then "no screen was chosen in time"; the screen-share portal connection died
    with the first stream's runtime). While connecting, the window says the desktop may ask
