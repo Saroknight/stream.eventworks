@@ -1,0 +1,166 @@
+<!-- Streamroom: how the browser, the app, the server and LiveKit fit together. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600" viewBox="0 0 1000 600" role="img" aria-labelledby="mapTitle mapDesc">
+      <title id="mapTitle">Streamroom system map</title>
+      <desc id="mapDesc">Browsers and the Streamroom Live app talk HTTPS to Caddy, which forwards to the Streamroom server for sign-in, rooms and passes, and to LiveKit for signaling. Video and sound go over WebRTC straight to LiveKit, which forwards them to friends watching.</desc>
+      <defs>
+        <marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="mk-c"/></marker>
+        <marker id="am" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="mk-m"/></marker>
+      </defs>
+<style>
+  .bg { fill: #ffffff; }
+  .box { fill: #ffffff; stroke: #c9ced8; stroke-width: 1.5; }
+  .box.app, .box.sfu { stroke: #d6303f; stroke-width: 2; }
+  .box.srv { stroke: #2457c5; stroke-width: 2; }
+  .frame { fill: none; stroke: #8a93a3; stroke-width: 1.5; stroke-dasharray: 2 5; stroke-linecap: round; }
+  .t-title { font: 700 17px "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #1b1f29; }
+  .t-sub { font: 12.5px "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #5c6473; }
+  .t-frame { font: 600 12px "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #5c6473; letter-spacing: 0.06em; text-transform: uppercase; }
+  .plane { font: 700 11px "Segoe UI", "Helvetica Neue", Arial, sans-serif; letter-spacing: 0.12em; fill: #5c6473; }
+  .t-mod { font: 600 12px ui-monospace, Consolas, Menlo, monospace; fill: #2457c5; }
+  .t-port { font: 11.5px ui-monospace, Consolas, Menlo, monospace; fill: #1b1f29; }
+  .t-lbl { font: 11px ui-monospace, Consolas, Menlo, monospace; }
+  .t-lbl.c { fill: #2457c5; } .t-lbl.m { fill: #d6303f; }
+  .ctl { fill: none; stroke: #2457c5; stroke-width: 1.8; stroke-dasharray: 6 4; }
+  .med { fill: none; stroke: #d6303f; stroke-width: 4; stroke-linecap: round; }
+  .halo { fill: none; stroke: #ffffff; stroke-width: 10; }
+  .mk-c { fill: #2457c5; } .mk-m { fill: #d6303f; }
+  .store { fill: #eef1f6; stroke: #c9ced8; stroke-width: 1; }
+  @media (prefers-color-scheme: dark) {
+  .bg { fill: #1b2029; }
+  .box { fill: #1b2029; stroke: #343b49; stroke-width: 1.5; }
+  .box.app, .box.sfu { stroke: #ff6b77; stroke-width: 2; }
+  .box.srv { stroke: #7aa2ff; stroke-width: 2; }
+  .frame { fill: none; stroke: #5d6677; stroke-width: 1.5; stroke-dasharray: 2 5; stroke-linecap: round; }
+  .t-title { font: 700 17px "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #e7eaf0; }
+  .t-sub { font: 12.5px "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #9aa3b3; }
+  .t-frame { font: 600 12px "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #9aa3b3; letter-spacing: 0.06em; text-transform: uppercase; }
+  .plane { font: 700 11px "Segoe UI", "Helvetica Neue", Arial, sans-serif; letter-spacing: 0.12em; fill: #9aa3b3; }
+  .t-mod { font: 600 12px ui-monospace, Consolas, Menlo, monospace; fill: #7aa2ff; }
+  .t-port { font: 11.5px ui-monospace, Consolas, Menlo, monospace; fill: #e7eaf0; }
+  .t-lbl.c { fill: #7aa2ff; }
+ .t-lbl.m { fill: #ff6b77; }
+  .ctl { fill: none; stroke: #7aa2ff; stroke-width: 1.8; stroke-dasharray: 6 4; }
+  .med { fill: none; stroke: #ff6b77; stroke-width: 4; stroke-linecap: round; }
+  .halo { fill: none; stroke: #1b2029; stroke-width: 10; }
+  .mk-c { fill: #7aa2ff; }
+ .mk-m { fill: #ff6b77; }
+  .store { fill: #232936; stroke: #343b49; stroke-width: 1; }
+  }
+</style>
+<rect class="bg" width="1000" height="600" rx="12"/>
+
+      <!-- plane labels -->
+
+      <!-- Lightsail frame -->
+      <rect x="284" y="14" width="460" height="572" rx="14" class="frame"/>
+      <text x="300" y="36" class="t-frame">AWS Lightsail · stream.eventworks.click</text>
+
+      <!-- Caddy -->
+      <rect x="300" y="50" width="380" height="64" rx="8" class="box"/>
+      <text x="316" y="76" class="t-title">Caddy</text>
+      <text x="316" y="97" class="t-sub">HTTPS on port 443</text>
+      <text x="664" y="76" text-anchor="end" class="t-port">/rtc → LiveKit</text>
+      <text x="664" y="97" text-anchor="end" class="t-port">everything else → :3000</text>
+
+      <!-- Streamroom server -->
+      <rect x="300" y="146" width="380" height="214" rx="8" class="box srv"/>
+      <text x="316" y="172" class="t-title">Streamroom server</text>
+      <text x="316" y="192" class="t-sub">Node + Express on :3000 · no video here</text>
+      <text x="316" y="222" class="t-mod">auth</text>   <text x="376" y="222" class="t-sub">invites, sign-in, devices</text>
+      <text x="316" y="248" class="t-mod">rooms</text>  <text x="376" y="248" class="t-sub">rooms + LiveKit passes</text>
+      <text x="316" y="274" class="t-mod">admin</text>  <text x="376" y="274" class="t-sub">people, devices, end rooms</text>
+      <text x="316" y="300" class="t-mod">health</text> <text x="376" y="300" class="t-sub">connection problem reports</text>
+      <text x="316" y="326" class="t-mod">appinfo</text><text x="376" y="326" class="t-sub">app download + version</text>
+      <!-- state.json -->
+      <rect x="574" y="206" width="94" height="104" rx="6" class="store"/>
+      <text x="621" y="228" text-anchor="middle" class="t-mod" style="fill:#1b1f29">state.json</text>
+      <text x="621" y="250" text-anchor="middle" class="t-sub">people</text>
+      <text x="621" y="267" text-anchor="middle" class="t-sub">sessions</text>
+      <text x="621" y="284" text-anchor="middle" class="t-sub">invites</text>
+      <text x="621" y="301" text-anchor="middle" class="t-sub">(hashes only)</text>
+
+      <!-- Caddy -> server -->
+      <path d="M380 114 V144" class="ctl" marker-end="url(#ac)"/>
+
+      <!-- server -> LiveKit (room API) -->
+      <path d="M380 360 V402" class="ctl" marker-end="url(#ac)"/>
+      <text x="392" y="380" class="t-lbl c">makes, lists and ends rooms;</text>
+      <text x="392" y="394" class="t-lbl c">removes people (LiveKit API)</text>
+
+      <!-- server -> GitHub (bridge over signaling line) -->
+      <!-- Caddy -> LiveKit signaling (right side) -->
+      <path d="M680 70 H710 V450 H682" class="ctl" marker-end="url(#ac)"/>
+      <text transform="translate(724 300) rotate(90)" text-anchor="middle" class="t-lbl c">signaling (WebSocket)</text>
+      <path d="M680 176 H778" class="halo" style="stroke-width:8"/>
+      <path d="M680 176 H778" class="ctl" marker-end="url(#ac)"/>
+
+      <!-- LiveKit -->
+      <rect x="300" y="404" width="380" height="164" rx="8" class="box sfu"/>
+      <text x="316" y="430" class="t-title">LiveKit</text>
+      <text x="316" y="450" class="t-sub">forwards each stream to everyone in the room</text>
+      <text x="316" y="467" class="t-sub">without re-encoding it. Rooms exist only here.</text>
+      <text x="316" y="494" class="t-port">7882/udp  media (normal path)</text>
+      <text x="316" y="513" class="t-port">7881/tcp  media fallback</text>
+      <text x="316" y="532" class="t-port">3478/udp  TURN relay</text>
+      <text x="316" y="551" class="t-port">:7880     signaling + API (local)</text>
+
+      <!-- Browser -->
+      <rect x="20" y="40" width="200" height="174" rx="8" class="box"/>
+      <text x="36" y="66" class="t-title">Your browser</text>
+      <text x="36" y="90" class="t-sub">site pages + LiveKit JS</text>
+      <text x="36" y="108" class="t-sub">signed in with a cookie</text>
+      <text x="36" y="126" class="t-sub">watches everyone's streams</text>
+      <text x="36" y="144" class="t-sub">can share its screen too</text>
+      <text x="36" y="162" class="t-sub">(the fallback way)</text>
+
+      <!-- Browser control -> Caddy -->
+      <path d="M220 70 H298" class="ctl" marker-end="url(#ac)"/>
+      <text x="228" y="62" class="t-lbl c">HTTPS</text>
+
+      <!-- Browser media -> LiveKit -->
+      <path d="M220 190 H272 V432 H296" class="med" marker-end="url(#am)"/>
+
+      <!-- App control -> Caddy (crosses browser media: halo bridge) -->
+      <path d="M246 178 V202" class="halo" style="stroke-width:8;stroke:#ffffff"/>
+      <path d="M220 420 H246 V100 H298" class="ctl" marker-end="url(#ac)"/>
+      <text transform="translate(238 300) rotate(-90)" text-anchor="middle" class="t-lbl c">app: /api + device key</text>
+      <text transform="translate(266 320) rotate(-90)" text-anchor="middle" class="t-lbl m">watch + share</text>
+
+      <!-- App -->
+      <rect x="20" y="394" width="200" height="174" rx="8" class="box app"/>
+      <text x="36" y="420" class="t-title">Streamroom Live</text>
+      <text x="36" y="444" class="t-sub">native app, Windows + Arch</text>
+      <text x="36" y="462" class="t-sub">captures screen and sound</text>
+      <text x="36" y="480" class="t-sub">GPU encodes H.264</text>
+      <text x="36" y="498" class="t-sub">sends only, never watches</text>
+      <text x="36" y="516" class="t-sub">(the main way to go live)</text>
+
+      <!-- App media -> LiveKit -->
+      <path d="M220 510 H296" class="med" marker-end="url(#am)"/>
+      <text x="226" y="500" class="t-lbl m">H.264</text>
+
+      <!-- GitHub Releases -->
+      <rect x="780" y="134" width="200" height="104" rx="8" class="box"/>
+      <text x="796" y="160" class="t-title">GitHub Releases</text>
+      <text x="796" y="183" class="t-sub">Windows installer, Linux</text>
+      <text x="796" y="200" class="t-sub">package. The app's updater</text>
+      <text x="796" y="217" class="t-sub">downloads from here too.</text>
+
+      <!-- Friends -->
+      <rect x="780" y="404" width="200" height="164" rx="8" class="box"/>
+      <text x="796" y="430" class="t-title">Friends watching</text>
+      <text x="796" y="454" class="t-sub">the same browser page on</text>
+      <text x="796" y="472" class="t-sub">their own devices; each</text>
+      <text x="796" y="490" class="t-sub">downloads only the streams</text>
+      <text x="796" y="508" class="t-sub">on screen. They sign in to</text>
+      <text x="796" y="526" class="t-sub">the site like your browser.</text>
+
+      <!-- LiveKit media -> friends -->
+      <path d="M680 510 H776" class="med" marker-end="url(#am)"/>
+      <text x="752" y="500" text-anchor="middle" class="t-lbl m">WebRTC</text>
+    
+      <!-- legend -->
+      <path d="M760 40 H790" class="ctl"/><text x="798" y="44" class="t-sub">HTTPS: sign-in, rooms</text>
+      <path d="M760 62 H790" class="med"/><text x="798" y="66" class="t-sub">WebRTC: video + sound</text>
+      <rect x="760" y="80" width="30" height="12" rx="3" class="frame"/><text x="798" y="90" class="t-sub">one Lightsail server</text>
+    </svg>
