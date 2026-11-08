@@ -50,41 +50,13 @@ Two halves:
 
 Folder notes load when Claude opens files there. `app/CLAUDE.md` has the app's capture design,
 build commands and lessons: read it before planning app work. `public/CLAUDE.md` has the site
-page behaviour. Release history is in `CHANGELOG.md`, open items in `BACKLOG.md`.
-
-## Auth model (server)
-
-- **Admin:** bootstrap link from `npm run admin-link` (or `sudo streamroom-admin-link` on the
-  server). Admin can invite, rename, remove people, sign out devices, end rooms.
-- **Friends:** personal invite link (7 days). Redeeming it signs that device in (90-day sliding
-  cookie session). "Sign in another device" gives a QR/one-time link (10 min).
-- **CSRF:** cookie is SameSite=Lax and every state-changing API call must be JSON
-  (`jsonOnly`), so forms from other sites can't call it.
-- **Rate limit:** small per-IP limiter on sign-in endpoints (`rateLimit` in `auth.js`).
-- **The app:** Go Live → "Open Streamroom Live" opens
-  `streamroom://open?server=…&room=…&pair=<code>`. The pair code is a single-use HMAC ticket
-  (10 minutes). The app exchanges it once (`POST /api/app/pair`) for its own **app session
-  key**: a 90-day session sent as `Authorization: Bearer`, flagged `viaApp`, **never allowed
-  on admin routes** (`requireAdmin` rejects it), revocable per device on the Admin page.
-  Stored as `account.dat` in the app's config folder: DPAPI-encrypted on Windows, a plain file
-  readable only by the user (0600) on Linux (see `BACKLOG.md`).
-- **LiveKit tokens** are minted per join (`rooms.js`, TTL 8h). Rooms are created only by the
-  server (`auto_create: false` in LiveKit), so ended rooms stay ended.
-- Legacy routes still exist and are candidates for removal: `POST /api/token` and the old
-  `/live/:id#k=KEY` app links (`/rooms/:id/app-link`, `Launch::Legacy` in `core`).
+page behaviour, `server/CLAUDE.md` the auth model, `tests/CLAUDE.md` the e2e notes. Release history is in `CHANGELOG.md`, open items in `BACKLOG.md`.
 
 ## Build, run, test
 
 ### Site
 Scripts are in `package.json`; `npm run dev` (LiveKit dev server + the site) needs
-`livekit-server` on PATH.
-e2e notes: needs `livekit-server` on PATH or `LIVEKIT_BIN`; Chromium via
-`npx playwright install chromium` or `CHROME_PATH`. `E2E_CLI=<path to streamroom-live-cli>` plus
-`E2E_CLI_ARGS="--height 720 --no-audio"` adds the step where the native engine streams into a
-room (on Linux it needs an X display). Clear `HTTPS_PROXY`/`HTTP_PROXY` for local runs behind a
-proxy. Test traps already solved: a closed `<dialog>` never counts as visible (wait on `open`);
-the external-protocol prompt wedges a tab (do that step in its own tab); Chrome needs
-`--use-fake-ui-for-media-stream` to offer host ICE candidates.
+`livekit-server` on PATH. e2e setup and test traps are in `tests/CLAUDE.md`.
 
 ## CI and releasing
 
@@ -107,35 +79,16 @@ the external-protocol prompt wedges a tab (do that step in its own tab); Chrome 
 - Each updater only looks at its own platform's tags (`TAG` in `update.rs`); the site's
   `appinfo.js` picks the newest `app-v*` release with the installer, and the newest Linux package
   for `/api/app/download/linux`.
-- Windows-only paths (Linux workflow ignores them): `wincap/src/{audio,capture,convert,cursor,d3d,
-  encoder,pipeline}.rs`, `desktop/icons/icon.ico`, `release/windows`. (`desktop/src/account.rs`
-  is shared: Linux stores the key there too.)
-  Linux-only paths (Windows workflow ignores them): `wincap/src/linux/**`, `packaging/**`,
-  `release/linux`. `app/README.md` and `app/CLAUDE.md` build neither. Everything else in `app/` builds both.
 - The Windows build is much slower than Linux; unit tests, `cargo fmt --check` and clippy run only on
-  Linux, so clippy never sees `#[cfg(windows)]` code. Style is `app/rustfmt.toml` (wide lines, matching
-  the code). `unwrap()` is denied outside tests in every crate (`[workspace.lints]` in
-  `app/Cargo.toml`, tests allowed by `app/clippy.toml`).
+  Linux, so clippy never sees `#[cfg(windows)]` code.
 - Tag pushes and GitHub's GraphQL API aren't available from some Claude environments; this
   release flow (version file + push) was chosen so no tag push is needed. `gh api` (REST) works
   for runs and releases.
 
 ## Deploy
 
-From AWS CloudShell (re-running updates in place and keeps people and settings):
-```
-rm -rf stream.eventworks && git clone -q --depth 1 https://github.com/Saroknight/stream.eventworks \
-  && DOMAIN=stream.eventworks.click bash stream.eventworks/deploy/aws/lightsail.sh
-```
-Add `REGION`/`NAME` if they were set originally. `RELAY_443=on` turns on the parked relay.
-The script creates or reuses the instance + static IP, opens ports 80, 443, 7881/tcp,
-7882/udp (and 3478/udp), sets Route 53 DNS if the zone is there, then runs
-`deploy/linux/setup.sh <domain> <public ip>` on the box.
-
-On the server: code `/opt/streamroom`, settings `/etc/streamroom.env`, data
-`/var/lib/streamroom/state.json`, LiveKit `/etc/livekit/livekit.yaml`; logs
-`journalctl -u streamroom -u livekit -u caddy -f`. **Site changes only go live after a deploy**;
-app releases don't need one (except changes to `appinfo.js`/download routes).
+**Site changes only go live after a deploy**; app releases don't need one (except changes to
+`appinfo.js`/download routes). Steps, server paths and logs are in the `deploy` skill.
 
 ## Lessons learned (don't relearn these)
 
