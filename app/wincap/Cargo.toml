@@ -47,5 +47,9 @@ tokio = { version = "1", features = ["rt", "time"] }
 serde_json = "1"
 thiserror = "2"
 
+[dev-dependencies]
+# The audiocheck example prints capture problems to the console.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
 [lints]
 workspace = true

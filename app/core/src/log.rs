@@ -43,7 +43,8 @@ pub fn init(path: Option<PathBuf>) {
     }
 }
 
-/// Our own crates log from `info` up, everything else only warnings and errors.
+/// Our own crates log from `info` up, everything else only warnings and errors. That includes
+/// crates using the `log` crate (LiveKit, WebRTC, Tauri): `try_init` routes them through here.
 fn filter() -> Targets {
     Targets::new().with_default(LevelFilter::WARN).with_target("streamroom", LevelFilter::INFO).with_target("wincap", LevelFilter::INFO)
 }

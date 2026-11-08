@@ -15,6 +15,7 @@ fn goertzel(samples: &[f32], freq: f32, rate: f32) -> f32 {
 }
 
 fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     let arg = std::env::args().nth(1).unwrap_or_else(|| "all".into());
     let mode = match arg.as_str() {
         "all" => wincap::AudioMode::All,
@@ -36,12 +37,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
     control.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "mode: {desc}; samples: {}; 440 Hz: {:.4}; 880 Hz: {:.4}; errors: {:?}",
-        left.len(),
-        goertzel(&left, 440.0, 48000.0),
-        goertzel(&left, 880.0, 48000.0),
-        control.take_errors()
-    );
+    println!("mode: {desc}; samples: {}; 440 Hz: {:.4}; 880 Hz: {:.4}", left.len(), goertzel(&left, 440.0, 48000.0), goertzel(&left, 880.0, 48000.0));
     Ok(())
 }
