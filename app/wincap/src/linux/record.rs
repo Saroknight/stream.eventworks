@@ -334,11 +334,15 @@ impl Drop for Recorder {
     }
 }
 
-/// A video frame's time in the file: its capture time, nudged so it always comes after the one
-/// before (the muxer refuses frames going backwards).
+/// Video frames in the file are at least this far apart: MKV keeps whole milliseconds, so
+/// frames closer than that came out with the same time (players may stutter there).
+const MIN_FRAME_GAP: Duration = Duration::from_millis(1);
+
+/// A video frame's time in the file: its capture time, nudged so it always comes at least
+/// `MIN_FRAME_GAP` after the one before.
 fn video_time(last: Option<Duration>, captured: Duration) -> Duration {
     match last {
-        Some(l) if captured <= l => l + Duration::from_micros(1),
+        Some(l) if captured < l + MIN_FRAME_GAP => l + MIN_FRAME_GAP,
         Some(_) | None => captured,
     }
 }
@@ -452,7 +456,9 @@ mod tests {
     fn video_times_never_go_backwards() {
         assert_eq!(video_time(None, MS(5)), MS(5));
         assert_eq!(video_time(Some(MS(5)), MS(21)), MS(21));
-        assert_eq!(video_time(Some(MS(21)), MS(20)), MS(21) + Duration::from_micros(1));
+        assert_eq!(video_time(Some(MS(21)), MS(20)), MS(22));
+        // MKV keeps whole milliseconds: frames less than 1 ms apart must still differ there.
+        assert_eq!(video_time(Some(MS(21)), MS(21) + Duration::from_micros(300)), MS(22));
     }
 
     #[test]

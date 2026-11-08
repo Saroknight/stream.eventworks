@@ -439,7 +439,15 @@ fn apply_requests(control: &Control, sink: &gst_app::AppSink, enc: &gst::Element
         sink.send_event(ev);
     }
     let bps = control.bitrate_request.swap(0, Ordering::Relaxed);
-    if bps > 0 && enc.has_property("bitrate") {
+    if bps == 0 {
+        return;
+    }
+    // Logged so a soft stream can be told apart from a slow network: the network side's
+    // bandwidth estimate sets the bitrate (up to the chosen one). Only changes over 10% get here,
+    // so a few lines while it ramps up, then the odd one.
+    let applied = enc.has_property("bitrate");
+    tracing::info!(kbps = bps / 1000, applied, "network side set the video bitrate");
+    if applied {
         enc.set_property_from_str("bitrate", &encoder.bitrate_value(bps).to_string());
     }
 }
