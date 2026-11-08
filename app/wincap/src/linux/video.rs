@@ -351,15 +351,28 @@ struct Node {
     serial: String,
 }
 
+/// Why the nodes on the portal's connection couldn't be listed.
+#[derive(Debug, thiserror::Error)]
+enum NodeListError {
+    #[error("GStreamer's PipeWire device provider isn't installed")]
+    NoProvider,
+    #[error("the PipeWire device provider can't be pointed at the portal's connection (no fd property)")]
+    NoFdProperty,
+    #[error("couldn't copy the portal's connection: {0}")]
+    CopyFd(#[from] std::io::Error),
+    #[error("couldn't connect to the portal's connection: {0}")]
+    Connect(#[from] gst::glib::BoolError),
+}
+
 /// The nodes on the portal's connection (the shared screen should be listed).
-fn portal_nodes(p: &portal::PortalStream) -> std::result::Result<Vec<Node>, &'static str> {
-    let provider = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider").ok_or("no PipeWire device provider")?;
-    let fd = p.fd.try_clone().map_err(|_| "fd")?;
+fn portal_nodes(p: &portal::PortalStream) -> std::result::Result<Vec<Node>, NodeListError> {
+    let provider = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider").ok_or(NodeListError::NoProvider)?;
     if provider.find_property("fd").is_none() {
-        return Err("device provider has no fd");
+        return Err(NodeListError::NoFdProperty);
     }
+    let fd = p.fd.try_clone()?;
     provider.set_property("fd", fd.as_raw_fd());
-    provider.start().map_err(|_| "couldn't connect")?;
+    provider.start()?;
     let list = provider
         .devices()
         .iter()
@@ -375,10 +388,11 @@ fn portal_nodes(p: &portal::PortalStream) -> std::result::Result<Vec<Node>, &'st
 }
 
 /// The screen stream's serial, looked up on the connection when the portal didn't report it
-/// (GNOME doesn't).
-fn lookup_serial(p: &portal::PortalStream) -> Option<u64> {
+/// (GNOME doesn't). Without it the pipeline falls back to the node id.
+fn lookup_serial(p: &portal::PortalStream, control: &Control) -> Option<u64> {
+    let nodes = portal_nodes(p).map_err(|e| control.report_error(format!("looking up the screen stream's serial: {e}"))).ok()?;
     let node = p.node.to_string();
-    portal_nodes(p).ok()?.into_iter().find(|n| n.id == node)?.serial.parse().ok()
+    nodes.into_iter().find(|n| n.id == node)?.serial.parse().ok()
 }
 
 /// What PipeWire shows on the portal's connection, for troubleshooting.
@@ -424,7 +438,7 @@ fn open_screen(control: &Arc<Control>, opts: &VideoOptions, remember: bool) -> R
     }
     let mut p = portal::open(control.clone(), opts.cursor, remember)?;
     if p.serial.is_none() {
-        p.serial = lookup_serial(&p);
+        p.serial = lookup_serial(&p, control);
     }
     Ok(Screen::Portal(p))
 }
