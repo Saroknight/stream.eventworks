@@ -2,7 +2,7 @@
 //! own "choose a screen or window" dialog, then hands us a PipeWire stream of it. We ask the
 //! portal to remember the choice (a restore token), so the dialog appears once, not every time.
 
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -12,6 +12,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use ashpd::desktop::{PersistMode, Session};
+use gstreamer as gst;
+use gstreamer::prelude::*;
 
 use crate::Control;
 
@@ -160,4 +162,65 @@ async fn share(proxy: &Screencast, session: &Session<Screencast>, request: Reque
     let (node, serial, size) = (stream.pipe_wire_node_id(), stream.pipewire_serial(), stream.size());
     let fd = proxy.open_pipe_wire_remote(session, Default::default()).await.map_err(|e| anyhow!("couldn't connect to the screen stream: {e}"))?;
     Ok(Shared { fd, node, serial, size })
+}
+
+/// A node PipeWire shows on the portal's connection.
+struct Node {
+    name: String,
+    class: String,
+    id: String,
+    serial: String,
+}
+
+/// Why the nodes on the portal's connection couldn't be listed.
+#[derive(Debug, thiserror::Error)]
+enum NodeListError {
+    #[error("GStreamer's PipeWire device provider isn't installed")]
+    NoProvider,
+    #[error("the PipeWire device provider can't be pointed at the portal's connection (no fd property)")]
+    NoFdProperty,
+    #[error("couldn't copy the portal's connection: {0}")]
+    CopyFd(#[from] std::io::Error),
+    #[error("couldn't connect to the portal's connection: {0}")]
+    Connect(#[from] gst::glib::BoolError),
+}
+
+/// The nodes on the portal's connection (the shared screen should be listed).
+fn portal_nodes(p: &PortalStream) -> std::result::Result<Vec<Node>, NodeListError> {
+    let provider = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider").ok_or(NodeListError::NoProvider)?;
+    if provider.find_property("fd").is_none() {
+        return Err(NodeListError::NoFdProperty);
+    }
+    let fd = p.fd.try_clone()?;
+    provider.set_property("fd", fd.as_raw_fd());
+    provider.start()?;
+    let list = provider
+        .devices()
+        .iter()
+        .map(|d| {
+            let props = d.properties();
+            let get = |k: &str| props.as_ref().and_then(|s| s.get::<String>(k).ok()).unwrap_or_default();
+            Node { name: d.display_name().into(), class: d.device_class().into(), id: get("object.id"), serial: get("object.serial") }
+        })
+        .collect();
+    provider.stop();
+    drop(fd);
+    Ok(list)
+}
+
+/// The screen stream's serial, looked up on the connection when the portal didn't report it
+/// (GNOME doesn't). Without it the pipeline falls back to the node id.
+pub fn lookup_serial(p: &PortalStream, control: &Control) -> Option<u64> {
+    let nodes = portal_nodes(p).map_err(|e| control.report_error(format!("looking up the screen stream's serial: {e}"))).ok()?;
+    let node = p.node.to_string();
+    nodes.into_iter().find(|n| n.id == node)?.serial.parse().ok()
+}
+
+/// What PipeWire shows on the portal's connection, for troubleshooting.
+pub fn visible_nodes(p: &PortalStream) -> String {
+    match portal_nodes(p) {
+        Err(e) => format!("can't check: {e}"),
+        Ok(list) if list.is_empty() => "nothing".into(),
+        Ok(list) => list.iter().map(|n| format!("{} [{}; id {}; serial {}]", n.name, n.class, n.id, n.serial)).collect::<Vec<_>>().join(", "),
+    }
 }
