@@ -82,13 +82,16 @@ fn pw_dump() -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// App output streams playing (or open) right now.
+/// App output streams playing right now.
 fn app_streams() -> Result<Vec<AppStream>> {
     let json = pw_dump()?;
     parse_app_streams(&json, &std::process::id().to_string())
 }
 
-/// The app output streams in `pw-dump` output, except this process's own (`me`: our pid).
+/// The app output streams in `pw-dump` output that are playing, except this process's own
+/// (`me`: our pid). Idle ones (a paused or finished video; browsers keep the stream open) are
+/// left out: capturing one never links, and it held up the whole mix, so nothing was captured
+/// (≤0.4.17). A paused app that plays again is picked up by the next plan check.
 fn parse_app_streams(json: &[u8], me: &str) -> Result<Vec<AppStream>> {
     let v: serde_json::Value = serde_json::from_slice(json).context("reading pw-dump's output")?;
     let mut list: Vec<AppStream> = v
@@ -98,6 +101,9 @@ fn parse_app_streams(json: &[u8], me: &str) -> Result<Vec<AppStream>> {
         .filter_map(|o| {
             let props = o.pointer("/info/props")?;
             if props.get("media.class")?.as_str()? != "Stream/Output/Audio" {
+                return None;
+            }
+            if o.pointer("/info/state").and_then(|s| s.as_str()) != Some("running") {
                 return None;
             }
             if props.get("application.process.id").map(|p| p.to_string().trim_matches('"') == me).unwrap_or(false) {
@@ -259,22 +265,26 @@ fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p:
 mod tests {
     use super::{parse_app_streams, AppStream};
 
-    /// Trimmed `pw-dump` output: two app streams, our own stream, a sink and a stream with no
-    /// binary name.
+    /// Trimmed `pw-dump` output: two playing app streams, our own stream, a sink, a stream with
+    /// no binary name and an idle (paused) one.
     const PW_DUMP: &str = r#"[
       { "id": 30, "type": "PipeWire:Interface:Node", "info": { "props": {
           "media.class": "Audio/Sink", "object.serial": 30, "node.name": "alsa_output.pci" } } },
-      { "id": 81, "type": "PipeWire:Interface:Node", "info": { "props": {
+      { "id": 81, "type": "PipeWire:Interface:Node", "info": { "state": "running", "props": {
           "media.class": "Stream/Output/Audio", "object.serial": 812, "application.process.id": 4242,
           "application.process.binary": "Discord", "application.name": "WEBRTC VoiceEngine" } } },
-      { "id": 82, "type": "PipeWire:Interface:Node", "info": { "props": {
+      { "id": 82, "type": "PipeWire:Interface:Node", "info": { "state": "running", "props": {
           "media.class": "Stream/Output/Audio", "object.serial": 820, "application.process.id": "777",
           "application.process.binary": "streamroom-live" } } },
-      { "id": 83, "type": "PipeWire:Interface:Node", "info": { "props": {
+      { "id": 83, "type": "PipeWire:Interface:Node", "info": { "state": "running", "props": {
           "media.class": "Stream/Output/Audio", "object.serial": 830, "application.name": "Firefox" } } },
+      { "id": 85, "type": "PipeWire:Interface:Node", "info": { "state": "idle", "props": {
+          "media.class": "Stream/Output/Audio", "object.serial": 850, "application.process.binary": "librewolf" } } },
       { "id": 84, "type": "PipeWire:Interface:Client", "info": { "props": { "application.name": "pw-dump" } } }
     ]"#;
 
+    /// An idle stream (a paused or finished video: browsers keep it open) never links, and one
+    /// in the mix held up the whole capture: no sound at all, even from the app playing.
     #[test]
     fn lists_app_output_streams_except_our_own() {
         let list = parse_app_streams(PW_DUMP.as_bytes(), "777").unwrap();
