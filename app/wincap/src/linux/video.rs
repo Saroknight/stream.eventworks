@@ -16,102 +16,14 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 
-use super::launch::{launch, next_error, Pipeline, PipelineError};
+use super::encoder::Encoder;
+use super::gate::FrameGate;
+use super::launch::{available, launch, next_error, Pipeline, PipelineError};
 use super::portal;
 use crate::{Control, EncodedFrame, VideoInfo, VideoOptions};
 
 /// Monitor index 1 on Linux = ask which screen or window every time.
 pub const ASK_EVERY_TIME: u32 = 1;
-
-/// The H.264 encoders we know how to drive, best first in `Encoder::ALL`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Encoder {
-    VaH264,
-    VaH264LowPower,
-    /// The older gstreamer-vaapi plugin.
-    Vaapi,
-    Nvenc,
-    X264,
-    OpenH264,
-}
-
-impl Encoder {
-    const ALL: [Encoder; 6] = [Self::VaH264, Self::VaH264LowPower, Self::Vaapi, Self::Nvenc, Self::X264, Self::OpenH264];
-
-    fn element(self) -> &'static str {
-        match self {
-            Self::VaH264 => "vah264enc",
-            Self::VaH264LowPower => "vah264lpenc",
-            Self::Vaapi => "vaapih264enc",
-            Self::Nvenc => "nvh264enc",
-            Self::X264 => "x264enc",
-            Self::OpenH264 => "openh264enc",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::VaH264 => "VA-API H.264 (graphics card)",
-            Self::VaH264LowPower => "VA-API H.264 low power (graphics card)",
-            Self::Vaapi => "VA-API H.264 (graphics card, legacy plugin)",
-            Self::Nvenc => "NVIDIA NVENC H.264 (graphics card)",
-            Self::X264 => "x264 (processor)",
-            Self::OpenH264 => "OpenH264 (processor)",
-        }
-    }
-
-    fn on_gpu(self) -> bool {
-        match self {
-            Self::VaH264 | Self::VaH264LowPower | Self::Vaapi | Self::Nvenc => true,
-            Self::X264 | Self::OpenH264 => false,
-        }
-    }
-
-    /// Runs on VA surfaces, which `vapostproc` makes.
-    fn wants_va_surfaces(self) -> bool {
-        match self {
-            Self::VaH264 | Self::VaH264LowPower => true,
-            Self::Vaapi | Self::Nvenc | Self::X264 | Self::OpenH264 => false,
-        }
-    }
-
-    /// The encoder and everything its part of the pipeline needs are installed.
-    fn available(self) -> bool {
-        available(self.element()) && (!self.wants_va_surfaces() || available("vapostproc"))
-    }
-
-    /// Constant bitrate, no B-frames, a keyframe at least every `gop` frames, low latency.
-    fn settings(self, kbps: u32, gop: u32) -> String {
-        match self {
-            Self::VaH264 | Self::VaH264LowPower => format!("rate-control=cbr bitrate={kbps} key-int-max={gop} b-frames=0 target-usage=7"),
-            Self::Vaapi => format!("rate-control=cbr bitrate={kbps} keyframe-period={gop} max-bframes=0 tune=low-power"),
-            Self::Nvenc => format!("rc-mode=cbr bitrate={kbps} gop-size={gop} bframes=0 zerolatency=true preset=low-latency-hq"),
-            Self::X264 => format!("tune=zerolatency speed-preset=veryfast bitrate={kbps} key-int-max={gop} bframes=0 vbv-buf-capacity=500"),
-            Self::OpenH264 => format!("bitrate={} gop-size={gop} rate-control=bitrate", self.bitrate_value(kbps * 1000)),
-        }
-    }
-
-    /// The encoder's `bitrate` property for `bps` bits per second.
-    fn bitrate_value(self, bps: u32) -> u32 {
-        match self {
-            Self::OpenH264 => bps,
-            Self::VaH264 | Self::VaH264LowPower | Self::Vaapi | Self::Nvenc | Self::X264 => bps / 1000,
-        }
-    }
-
-    /// Scales the frames to `size` (caps fields) in the format the encoder takes.
-    fn convert(self, size: &str) -> String {
-        match self {
-            Self::VaH264 | Self::VaH264LowPower => format!("vapostproc ! video/x-raw(memory:VAMemory),format=NV12{size}"),
-            Self::Vaapi | Self::Nvenc => format!("videoconvert ! videoscale ! video/x-raw,format=NV12{size}"),
-            Self::X264 | Self::OpenH264 => format!("videoconvert ! videoscale ! video/x-raw,format=I420{size}"),
-        }
-    }
-}
-
-fn available(name: &str) -> bool {
-    gst::ElementFactory::find(name).is_some()
-}
 
 /// Wayland, or no X display either: the screen comes from the desktop's screen-share portal.
 fn use_portal() -> bool {
@@ -124,7 +36,11 @@ const SQUARE: &str = "capssetter caps=\"video/x-raw,pixel-aspect-ratio=(fraction
 /// The screen part of the pipeline.
 enum Screen {
     Portal(portal::PortalStream),
-    X11 { cursor: bool },
+    /// `size`: the X screen's, when it could be read before starting.
+    X11 {
+        cursor: bool,
+        size: Option<(u32, u32)>,
+    },
 }
 
 impl Screen {
@@ -164,14 +80,16 @@ impl Screen {
                 p.fd.as_raw_fd(),
             ),
             // ximagesrc runs at a fixed rate, 25 fps unless told otherwise.
-            Screen::X11 { cursor } => format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! video/x-raw,framerate={fps}/1 ! {SQUARE}"),
+            Screen::X11 { cursor, .. } => {
+                format!("ximagesrc name=src use-damage=false show-pointer={cursor} ! video/x-raw,framerate={fps}/1 ! {SQUARE}")
+            }
         }
     }
-    /// The screen's shape as the portal reported it (X11: unknown until it runs).
+    /// The screen's shape, as the portal reported it or as X11 says.
     fn size(&self) -> Option<(u32, u32)> {
         match self {
             Screen::Portal(p) => p.size.filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| (w as u32, h as u32)),
-            Screen::X11 { .. } => None,
+            Screen::X11 { size, .. } => size.filter(|(w, h)| *w > 0 && *h > 0),
         }
     }
     fn method(&self) -> &'static str {
@@ -237,41 +155,6 @@ struct Started {
     target: String,
     /// What failed before this worked.
     tried: Vec<String>,
-}
-
-/// Lets frames through at no more than the chosen rate, by their timestamps. Screens can send
-/// far more (a 165 Hz monitor sends 165 fps), which starves each frame of bitrate. Runs before
-/// the encoder: dropping encoded H.264 frames would break the ones that refer to them.
-#[derive(Debug)]
-struct FrameGate {
-    /// Nanoseconds between frames at the chosen rate.
-    interval: u64,
-    /// How early a frame may be and still count as on time (timestamps jitter).
-    slack: u64,
-    /// When the next frame is due; `None` before the first one.
-    next: Option<u64>,
-}
-
-impl FrameGate {
-    fn new(fps: u32) -> Self {
-        let interval = 1_000_000_000 / u64::from(fps.max(1));
-        Self { interval, slack: interval / 4, next: None }
-    }
-
-    /// Whether the frame stamped `pts` (nanoseconds) goes through.
-    fn admit(&mut self, pts: u64) -> bool {
-        let next = match self.next {
-            // A timestamp well before the schedule means the clock restarted: start over.
-            Some(next) if pts + self.interval + self.slack < next => pts + self.interval,
-            Some(next) if pts + self.slack < next => return false,
-            // After a pause (a still screen sends nothing), don't let frames burst to catch up.
-            Some(next) if pts > next + self.interval => pts + self.interval,
-            Some(next) => next + self.interval,
-            None => pts + self.interval,
-        };
-        self.next = Some(next);
-        true
-    }
 }
 
 /// Counts the frames leaving `element` into one of the `Stats` counters.
@@ -343,53 +226,6 @@ fn is_target_not_found(e: &anyhow::Error) -> bool {
     e.downcast_ref::<PipelineError>().is_some_and(PipelineError::target_not_found)
 }
 
-/// A node PipeWire shows on the portal's connection.
-struct Node {
-    name: String,
-    class: String,
-    id: String,
-    serial: String,
-}
-
-/// The nodes on the portal's connection (the shared screen should be listed).
-fn portal_nodes(p: &portal::PortalStream) -> std::result::Result<Vec<Node>, &'static str> {
-    let provider = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider").ok_or("no PipeWire device provider")?;
-    let fd = p.fd.try_clone().map_err(|_| "fd")?;
-    if provider.find_property("fd").is_none() {
-        return Err("device provider has no fd");
-    }
-    provider.set_property("fd", fd.as_raw_fd());
-    provider.start().map_err(|_| "couldn't connect")?;
-    let list = provider
-        .devices()
-        .iter()
-        .map(|d| {
-            let props = d.properties();
-            let get = |k: &str| props.as_ref().and_then(|s| s.get::<String>(k).ok()).unwrap_or_default();
-            Node { name: d.display_name().into(), class: d.device_class().into(), id: get("object.id"), serial: get("object.serial") }
-        })
-        .collect();
-    provider.stop();
-    drop(fd);
-    Ok(list)
-}
-
-/// The screen stream's serial, looked up on the connection when the portal didn't report it
-/// (GNOME doesn't).
-fn lookup_serial(p: &portal::PortalStream) -> Option<u64> {
-    let node = p.node.to_string();
-    portal_nodes(p).ok()?.into_iter().find(|n| n.id == node)?.serial.parse().ok()
-}
-
-/// What PipeWire shows on the portal's connection, for troubleshooting.
-fn visible_nodes(p: &portal::PortalStream) -> String {
-    match portal_nodes(p) {
-        Err(e) => format!("can't check: {e}"),
-        Ok(list) if list.is_empty() => "nothing".into(),
-        Ok(list) => list.iter().map(|n| format!("{} [{}; id {}; serial {}]", n.name, n.class, n.id, n.serial)).collect::<Vec<_>>().join(", "),
-    }
-}
-
 /// Tries each available encoder in order; the first that produces video wins. On failure,
 /// what was tried and why each failed.
 fn start_encoders(screen: &Screen, opts: &VideoOptions, control: &Arc<Control>) -> std::result::Result<Started, Vec<String>> {
@@ -420,13 +256,26 @@ fn start_encoders(screen: &Screen, opts: &VideoOptions, control: &Arc<Control>) 
 
 fn open_screen(control: &Arc<Control>, opts: &VideoOptions, remember: bool) -> Result<Screen> {
     if !use_portal() {
-        return Ok(Screen::X11 { cursor: opts.cursor });
+        return Ok(Screen::X11 { cursor: opts.cursor, size: x11_size(control) });
     }
     let mut p = portal::open(control.clone(), opts.cursor, remember)?;
     if p.serial.is_none() {
-        p.serial = lookup_serial(&p);
+        p.serial = portal::lookup_serial(&p, control);
     }
     Ok(Screen::Portal(p))
+}
+
+/// The X screen's size: ximagesrc reports it in its caps once it has opened the display.
+/// Without it the scaler picks the output width, which can be odd (1365x720 from a 3640x1920
+/// desktop), and x264 refuses odd widths.
+fn x11_size(control: &Control) -> Option<(u32, u32)> {
+    let src = gst::ElementFactory::make("ximagesrc").build().ok()?;
+    // A live source: Paused opens the display without waiting for a frame.
+    let size = src.set_state(gst::State::Paused).ok().and_then(|_| src.static_pad("src")).and_then(|pad| caps_size(&pad.query_caps(None)));
+    if let Err(e) = src.set_state(gst::State::Null) {
+        control.report_error(format!("stopping the X11 screen size check: {e}"));
+    }
+    size
 }
 
 /// What the desktop handed over, for troubleshooting a failed start.
@@ -441,7 +290,7 @@ fn failure_detail(screen: &Screen) -> String {
                 p.node,
                 p.serial,
                 p.size,
-                visible_nodes(p)
+                portal::visible_nodes(p)
             )
         }
         Screen::X11 { .. } => String::new(),
@@ -534,7 +383,7 @@ fn stream(run: Running, encoder: Encoder, control: &Control, tx: &SyncSender<Enc
         }
         apply_requests(control, &sink, &enc, encoder);
         let Some(sample) = next.take().or_else(|| sink.try_pull_sample(gst::ClockTime::from_mseconds(50))) else { continue };
-        if !send(&sample, control, tx, out) {
+        if !send(&sample, &pipeline, control, tx, out) {
             return;
         }
     }
@@ -552,8 +401,20 @@ fn apply_requests(control: &Control, sink: &gst_app::AppSink, enc: &gst::Element
     }
 }
 
+/// How long ago the encoded frame in `sample` was captured. The screen source stamps each
+/// frame with the pipeline's running time as it arrives (`do-timestamp` on pipewiresrc;
+/// ximagesrc always does). Encoders shift their output's timestamps (by 1000 hours, so decode
+/// times never go negative), so the stamp is turned back into running time with the sample's
+/// segment.
+fn since_capture(sample: &gst::Sample, pipeline: &gst::Pipeline) -> Option<Duration> {
+    let pts = sample.buffer()?.pts()?;
+    let captured = sample.segment()?.downcast_ref::<gst::ClockTime>()?.to_running_time(pts)?;
+    let age = pipeline.current_running_time()?.checked_sub(captured)?;
+    Some(Duration::from_nanos(age.nseconds()))
+}
+
 /// Sends one encoded frame on. Returns false once nobody is receiving.
-fn send(sample: &gst::Sample, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> bool {
+fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> bool {
     let Some(buf) = sample.buffer() else { return true };
     let Ok(map) = buf.map_readable() else { return true };
     let keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
@@ -564,7 +425,11 @@ fn send(sample: &gst::Sample, control: &Control, tx: &SyncSender<EncodedFrame>, 
     if keyframe {
         s.keyframes.fetch_add(1, Ordering::Relaxed);
     }
-    let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us: now_us(), encode_latency_us: 0 };
+    let latency = since_capture(sample, pipeline).unwrap_or_default();
+    let latency_us = u32::try_from(latency.as_micros()).unwrap_or(u32::MAX);
+    s.last_latency_us.store(latency_us, Ordering::Relaxed);
+    let capture_unix_us = now_us() - i64::from(latency_us);
+    let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us, encode_latency_us: latency_us };
     match tx.try_send(frame) {
         Ok(()) => true,
         Err(TrySendError::Full(_)) => {
@@ -585,67 +450,5 @@ pub fn list_monitors() -> Vec<crate::Monitor> {
         ]
     } else {
         vec![crate::Monitor { index: 0, name: "Whole desktop".into(), width: 0, height: 0, primary: true, gpu: String::new() }]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Encoder, FrameGate};
-
-    #[test]
-    fn bitrate_units_match_each_encoder() {
-        // OpenH264 takes bits per second, the others kilobits.
-        assert!(Encoder::OpenH264.settings(8000, 120).starts_with("bitrate=8000000 "));
-        assert_eq!(Encoder::OpenH264.bitrate_value(8_000_000), 8_000_000);
-        for e in [Encoder::VaH264, Encoder::VaH264LowPower, Encoder::Vaapi, Encoder::Nvenc, Encoder::X264] {
-            assert!(e.settings(8000, 120).contains("bitrate=8000 "), "{e:?}");
-            assert_eq!(e.bitrate_value(8_000_000), 8000, "{e:?}");
-        }
-    }
-
-    const SEC: u64 = 1_000_000_000;
-
-    /// How many of `frames` timestamps the gate lets through.
-    fn admitted(fps: u32, frames: impl Iterator<Item = u64>) -> usize {
-        let mut gate = FrameGate::new(fps);
-        frames.filter(|&pts| gate.admit(pts)).count()
-    }
-
-    #[test]
-    fn caps_a_165_hz_screen_to_60_fps() {
-        let n = admitted(60, (0..165 * 2).map(|i| i * SEC / 165));
-        assert!((118..=121).contains(&n), "{n} frames in 2 s");
-    }
-
-    #[test]
-    fn keeps_every_frame_of_a_jittery_60_hz_screen() {
-        // ±2 ms around each 16.7 ms tick.
-        let jitter = [0i64, 2_000_000, -2_000_000, 1_000_000, -1_500_000];
-        let frames = (0..120u64).map(|i| (i * SEC / 60 + 10_000_000).saturating_add_signed(jitter[i as usize % jitter.len()]));
-        assert_eq!(admitted(60, frames), 120);
-    }
-
-    #[test]
-    fn halves_a_60_hz_screen_capped_at_30() {
-        let n = admitted(30, (0..120).map(|i| i * SEC / 60));
-        assert!((59..=61).contains(&n), "{n} frames in 2 s");
-    }
-
-    #[test]
-    fn no_burst_after_a_still_screen() {
-        let mut gate = FrameGate::new(60);
-        assert!(gate.admit(0));
-        // Nothing for 5 s, then 165 Hz again: still at most ~60 in the next second.
-        let n = (0..165).map(|i| 5 * SEC + i * SEC / 165).filter(|&pts| gate.admit(pts)).count();
-        assert!((59..=61).contains(&n), "{n} frames in 1 s");
-    }
-
-    #[test]
-    fn starts_over_when_timestamps_go_back() {
-        let mut gate = FrameGate::new(60);
-        assert!(gate.admit(10 * SEC));
-        assert!(gate.admit(0));
-        assert!(!gate.admit(SEC / 165));
-        assert!(gate.admit(SEC / 60));
     }
 }

@@ -81,3 +81,8 @@ impl PipelineError {
 pub fn next_error(bus: &gst::Bus, wait: gst::ClockTime) -> Option<PipelineError> {
     bus.timed_pop_filtered(wait, &[gst::MessageType::Error]).as_ref().and_then(PipelineError::from_message)
 }
+
+/// The GStreamer element `name` is installed.
+pub fn available(name: &str) -> bool {
+    gst::ElementFactory::find(name).is_some()
+}
