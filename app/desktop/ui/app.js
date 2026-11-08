@@ -78,6 +78,7 @@ function render() {
   } else if (st.kind === 'connecting') {
     showState('connecting');
     $('connectingTo').textContent = `Joining the room on ${hostOf(st.server)}`;
+    $('connectingHint').classList.toggle('hidden', !snap.screen_dialog);
   } else if (st.kind === 'live') {
     showState('live');
     liveSince = st.since;

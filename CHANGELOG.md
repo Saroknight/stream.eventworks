@@ -2,6 +2,10 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Linux 0.4.15: fixed going live a second time without restarting the app (stuck on
+   Connecting, then "no screen was chosen in time"; the screen-share portal connection died
+   with the first stream's runtime). While connecting, the window says the desktop may ask
+   which screen to share.
 - Linux 0.4.14: *Save a copy on this computer*: the stream (as sent, with sound) saved to
    `~/Videos/Streamroom` as MKV, on/off in Settings and from the live view without restarting
    the stream, failures shown in the live view; CLI `--record`. Windows gets the shared code

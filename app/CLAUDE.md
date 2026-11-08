@@ -106,6 +106,10 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
   segment (`to_running_time`), or every latency comes out negative.
 - **x264 refuses odd widths.** On X11 the screen size is read first (ximagesrc caps in Paused)
   so the output width is spelled out and even; left to the scaler it picked 1365x720.
+- **One tokio runtime for all portal work, for the life of the app.** ashpd caches one D-Bus
+  connection per process and zbus drives it from the runtime it was first used on. A runtime
+  per session (≤0.4.14) made the second go-live in one run hang: no dialog, then "no screen was
+  chosen in time" after 3 minutes (`portal_runtime` in `portal.rs`).
 - **A failed GStreamer pipeline must be set to Null,** or it keeps threads and PipeWire streams.
 - **`set_state(Playing)` failing hides the reason:** read the Error message off the bus.
 - **Windows build features:** `wincap` needs `Win32_Security` (for `CreateEventW`).

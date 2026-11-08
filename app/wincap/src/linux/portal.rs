@@ -6,7 +6,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -28,7 +28,6 @@ pub struct PortalStream {
     /// A remembered choice was used (no dialog).
     pub restored: bool,
     stop: Arc<AtomicBool>,
-    _thread: std::thread::JoinHandle<()>,
 }
 
 impl Drop for PortalStream {
@@ -84,18 +83,34 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
     let stop_t = stop.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<Shared>>();
     let request = Request { cursor, remember };
-    let thread = std::thread::Builder::new().name("screen-portal".into()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(rt) => rt.block_on(serve(&control, &stop_t, request, &tx)),
-            Err(e) => {
-                deliver(&control, &tx, Err(anyhow::Error::new(e).context("starting the screen-share thread")));
-            }
-        }
-    })?;
+    portal_runtime()?.spawn(async move { serve(&control, &stop_t, request, &tx).await });
     // The user may take a while in the dialog.
     let shared = rx.recv_timeout(Duration::from_secs(180)).map_err(|_| anyhow!("no screen was chosen in time"))?.context("screen sharing")?;
     let Shared { fd, node, serial, size } = shared;
-    Ok(PortalStream { fd, node, serial, size, restored, stop, _thread: thread })
+    Ok(PortalStream { fd, node, serial, size, restored, stop })
+}
+
+/// The runtime all portal work runs on, started once and kept for the life of the app. ashpd
+/// keeps one D-Bus connection for the whole process, and zbus drives that connection from the
+/// tokio runtime it was first used on. With a runtime per session (before 0.4.15), the second
+/// go-live in the same run waited forever on a dead connection: no dialog, then "no screen was
+/// chosen in time".
+fn portal_runtime() -> Result<tokio::runtime::Handle> {
+    static RUNTIME: Mutex<Option<tokio::runtime::Handle>> = Mutex::new(None);
+    let mut slot = RUNTIME.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(h) = slot.as_ref() {
+        return Ok(h.clone());
+    }
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().context("starting the screen-share thread")?;
+    let handle = rt.handle().clone();
+    // A current-thread runtime only runs its tasks while something blocks on it: this thread does,
+    // for good.
+    std::thread::Builder::new()
+        .name("screen-portal".into())
+        .spawn(move || rt.block_on(std::future::pending::<()>()))
+        .context("starting the screen-share thread")?;
+    *slot = Some(handle.clone());
+    Ok(handle)
 }
 
 /// Hands the result to `open`. Returns whether `open` was still waiting for it.

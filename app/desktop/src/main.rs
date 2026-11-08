@@ -84,6 +84,8 @@ struct Snapshot {
     log_path: String,
     /// This build can save a copy of the stream (Linux).
     can_record: bool,
+    /// Going live may show the desktop's "choose a screen" dialog (Linux on Wayland).
+    screen_dialog: bool,
 }
 
 // ---------- status ----------
@@ -365,6 +367,7 @@ fn get_state(state: State<'_, AppState>) -> Snapshot {
         update: state.update.lock().unwrap_or_else(PoisonError::into_inner).clone(),
         log_path: log::path().display().to_string(),
         can_record: CAN_RECORD,
+        screen_dialog: streamroom_core::screen_dialog(),
     }
 }
 

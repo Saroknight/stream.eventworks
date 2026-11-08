@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 
 pub use api::{Account, Api, Launch, SignedOut};
 pub use link::{AppLink, Joined};
-pub use wincap::{audio_apps, list_monitors, AudioMode, Control, Monitor, Recording, VideoInfo, CAN_RECORD};
+pub use wincap::{audio_apps, list_monitors, screen_dialog, AudioMode, Control, Monitor, Recording, VideoInfo, CAN_RECORD};
 
 /// Call once at startup. Two TLS backends end up compiled in through different dependencies;
 /// without picking one, the first secure (wss://) connection panics.

@@ -31,6 +31,11 @@ fn use_portal() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_none()
 }
 
+/// Going live may show the desktop's "choose a screen or window" dialog (the Wayland portal).
+pub fn screen_dialog() -> bool {
+    use_portal()
+}
+
 /// Sets square pixels on the screen's frames (see `Screen::source`).
 const SQUARE: &str = "capssetter caps=\"video/x-raw,pixel-aspect-ratio=(fraction)1/1\"";
 
