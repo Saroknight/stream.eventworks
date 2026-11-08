@@ -96,6 +96,11 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
   after it breaks negotiation on GNOME (0.4.6 regression). The fix is `FrameGate` at the encoder
   input; never drop *encoded* H.264 frames (later frames depend on them). `videorate` was removed
   in 0.4.9 as dead weight.
+- **Tell the encoder the capped frame rate.** Encoders split their bitrate by the caps'
+  frame rate; a PipeWire screen says `0/1` with `max-framerate` ≈360 fps (GNOME), and VA-API
+  budgeted for that: 16 Mbps came out as 1.5 Mbps at 55 fps (≤0.4.15). A `capssetter
+  framerate=<fps>/1` right before the encoder fixes it (downstream only, so negotiation with the
+  screen is unaffected). Check with `GST_DEBUG=vah264enc:5` ("frame duration is").
 - **`ximagesrc` defaults to 25 fps** unless the caps after it set a framerate (X11 only; the
   fixed rate there is safe, unlike the GNOME portal stream). Fixed in 0.4.9.
 - **KDE can report pixel aspect 2147483647:1**, which overflows scalers: force square pixels
