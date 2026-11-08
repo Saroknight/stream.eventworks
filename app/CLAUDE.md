@@ -117,6 +117,10 @@ plus `clang pkgconf openssl`. See `app-linux.yml` for the exact list.
   connection per process and zbus drives it from the runtime it was first used on. A runtime
   per session (≤0.4.14) made the second go-live in one run hang: no dialog, then "no screen was
   chosen in time" after 3 minutes (`portal_runtime` in `portal.rs`).
+- **Only capture app sound streams that are playing** (`info.state == "running"` in `pw-dump`).
+  Browsers keep an idle stream open after a video stops; a `pipewiresrc` on it never links, and
+  one in the `audiomixer` held up the whole pipeline (Playing failed after ~30 s, retried
+  forever): no sound at all, even from the game playing (≤0.4.17).
 - **A failed GStreamer pipeline must be set to Null,** or it keeps threads and PipeWire streams.
 - **`set_state(Playing)` failing hides the reason:** read the Error message off the bus.
 - **Windows build features:** `wincap` needs `Win32_Security` (for `CreateEventW`).

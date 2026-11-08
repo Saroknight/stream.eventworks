@@ -2,6 +2,9 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Linux 0.4.18: fixed sound going silent when another app had a paused or finished video
+   (browsers keep an idle sound stream open, and one idle stream stopped all sound capture,
+   game included). Only playing streams are captured now.
 - Linux 0.4.17: the log shows each bitrate change from the network side (to tell a soft stream
    from a slow network); saved copies no longer get two video frames with the same time
    (MKV keeps whole milliseconds).
