@@ -137,6 +137,12 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   h264parse ! appsink`.
 - **Encoders, tried in order** until one produces a frame: `vah264enc`/`vah264lpenc` (with
   `vapostproc`), `vaapih264enc`, `nvh264enc`, `x264enc`, `openh264enc`.
+- **DMA-BUF (zero-copy) is already in use** with `vah264enc`/`vah264lpenc`: caps negotiation picks
+  `memory:DMABuf` because `vapostproc` accepts it (checked on GNOME + AMD: `DMA_DRM` XR24 with a
+  tiling modifier; about 3x less CPU in our process than forced system memory, and the
+  compositor skips a GPU readback). The other encoders go through `videoconvert`, so they get
+  system memory. Check what was negotiated with `GST_DEBUG=pipewiresrc:4` ("set format"). KDE
+  not yet checked; NVIDIA (`nvh264enc`) has no DMA-BUF path.
 - **Finding the portal stream:** `target-object=<serial>` (serial from the portal, or looked up on
   the portal's connection with the PipeWire device provider; GNOME doesn't report it), then
   `path=<node id>`, then no target. Failures list what was tried and what's visible on the
