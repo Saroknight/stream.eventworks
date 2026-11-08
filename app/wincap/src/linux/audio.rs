@@ -7,7 +7,8 @@
 //!
 //! App streams are found with `pw-dump` (part of PipeWire) and re-checked every few seconds, so
 //! apps that start or stop playing are picked up. Output: 48 kHz stereo, 10 ms chunks of
-//! 16-bit PCM, continuous (silence when nothing plays).
+//! 16-bit PCM, continuous (silence when nothing plays), except while per-app capture is paused
+//! after repeated failures (nothing is sent then).
 
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -29,9 +30,9 @@ const CHANNELS: u16 = 2;
 const CHUNK: usize = (RATE / 100) as usize * CHANNELS as usize;
 /// `pw-dump` answers in a few milliseconds; longer means PipeWire is stuck.
 const PW_DUMP_TIMEOUT: Duration = Duration::from_secs(2);
-/// Per-app capture failing this many times in a row: share all PC audio for a while.
+/// Per-app capture failing this many times in a row: share no sound for a while.
 const FAILS_BEFORE_FALLBACK: u32 = 3;
-/// How long all PC audio is shared before per-app capture is tried again.
+/// How long no sound is shared before per-app capture is tried again.
 const FALLBACK_TIME: Duration = Duration::from_secs(30);
 /// A pipeline that ran this long was healthy: earlier failures no longer count.
 const HEALTHY_RUN: Duration = Duration::from_secs(10);
@@ -185,7 +186,7 @@ fn capture(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode
     let mut fails = 0;
     while !control.stop.load(Ordering::Relaxed) {
         let started = Instant::now();
-        let result = plan(mode).and_then(|p| run(control, tx, mode, &p, None));
+        let result = plan(mode).and_then(|p| run(control, tx, mode, &p));
         if started.elapsed() >= HEALTHY_RUN {
             fails = 0;
         }
@@ -195,29 +196,35 @@ fn capture(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode
         };
         fails += 1;
         control.report_error(format!("audio capture restarting: {e:#}"));
-        // Per-app capture keeps failing: share everything for a while rather than nothing,
-        // then try per-app again (one more failure comes straight back here).
+        // Per-app capture keeps failing: share no sound for a while (all PC audio would include
+        // Discord), then try per-app again (one more failure comes straight back here).
         if fails >= FAILS_BEFORE_FALLBACK && !matches!(mode, AudioMode::All) {
-            control.report_error(format!("sharing all PC audio for {} s, then trying {} again", FALLBACK_TIME.as_secs(), describe(mode)));
-            if let Err(e) = run(control, tx, &AudioMode::All, &Plan::All, Some(Instant::now() + FALLBACK_TIME)) {
-                control.report_error(format!("all-audio fallback failed: {e:#}"));
-            }
+            control.report_error(format!("sharing no sound for {} s, then trying {} again", FALLBACK_TIME.as_secs(), describe(mode)));
+            pause(control, FALLBACK_TIME);
             fails = FAILS_BEFORE_FALLBACK - 1;
         }
         std::thread::sleep(Duration::from_millis(500));
     }
 }
 
-/// Runs one pipeline until the plan changes (apps start/stop), `until` passes, or we're
+/// Waits `time`, or less if we're stopped.
+fn pause(control: &Control, time: Duration) {
+    let until = Instant::now() + time;
+    while !control.stop.load(Ordering::Relaxed) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Runs one pipeline until the plan changes (apps start/stop) or we're
 /// stopped. The pipeline is shut down however this exits.
-fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan, until: Option<Instant>) -> Result<()> {
+fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan) -> Result<()> {
     let (pipeline, sink) = launch(&pipeline_text(p), "audio", control)?;
     pipeline.set_state(gst::State::Playing).context("starting audio")?;
     let bus = pipeline.bus();
     let mut pending: Vec<i16> = Vec::with_capacity(CHUNK * 4);
     let mut last_check = Instant::now();
     loop {
-        if control.stop.load(Ordering::Relaxed) || until.is_some_and(|t| Instant::now() >= t) {
+        if control.stop.load(Ordering::Relaxed) {
             break Ok(());
         }
         if let Some(e) = bus.as_ref().and_then(|b| next_error(b, gst::ClockTime::ZERO)) {

@@ -14,6 +14,7 @@ testsrc = ["streamroom-core/testsrc"]
 [dependencies]
 anyhow.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 streamroom-core = { path = "../core" }
 
 [lints]

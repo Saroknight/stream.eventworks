@@ -147,7 +147,8 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   `pipewiresrc target-object=<serial>` (with `media.type=Audio`) into an `audiomixer`; "all PC
   audio" is `pulsesrc @DEFAULT_MONITOR@`. A guard sets failed pipelines back to Null (they
   leaked threads and PipeWire streams before 0.4.7). `pw-dump` is killed after 2 s. Per-app
-  capture failing 3 times in a row shares all PC audio for 30 s, then tries per-app again.
+  capture failing 3 times in a row shares no sound for 30 s (all PC audio would include
+  Discord), then tries per-app again.
 - **Updater on Linux:** downloads the package, verifies SHA256SUMS, `pkexec pacman -U`, relaunches.
 
 ### App behaviour shared by both
@@ -159,7 +160,12 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   mid-stream. "Copy diagnostics" copies a JSON snapshot (version, status, settings, monitors,
   stats, log path).
 - Logs: Linux `~/.local/share/click.eventworks.streamroom/logs/streamroom-live.log`, Windows
-  under `%LOCALAPPDATA%\click.eventworks.streamroom\logs\`.
+  under `%LOCALAPPDATA%\click.eventworks.streamroom\logs\` (the CLI: `streamroom-live.log` in the
+  temp folder). Code logs with `tracing`; `core::log::init` sends it to the file through a
+  background writer (our crates from `info`, others from `warn`), and `log::flush()` must run
+  before exiting (the app does it on `RunEvent::Exit`, the CLI before `process::exit`) or the
+  last lines are lost. `Control::report_error` logs too, so its messages aren't logged again.
+- A dropped encoded frame (the network side is behind) requests a keyframe on both platforms.
 
 ## Build, run, test
 
@@ -318,3 +324,7 @@ Not started unless the owner picks them:
    logged.
 11. Linux 0.4.11: real capture-to-encoded time (was always 0 ms), even output width on X11,
    typed error for the PipeWire node lookup, `video.rs` split into `encoder.rs`/`gate.rs`/`portal.rs`.
+12. Windows 0.4.5 / Linux 0.4.12: logging through `tracing` with a non-blocking file writer (was
+   opening the file for every line), typed sound setting `AudioChoice` (same saved values),
+   Linux asks for a keyframe when a frame is dropped, Linux per-app sound fallback shares
+   silence instead of all PC audio.

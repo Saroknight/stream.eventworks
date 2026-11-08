@@ -395,7 +395,7 @@ fn process_loopback_works() -> bool {
     match activate_process_loopback(std::process::id(), true) {
         Ok(_) => true,
         Err(e) => {
-            eprintln!("per-app audio not available: {e:#}");
+            tracing::warn!("per-app audio not available: {e:#}");
             false
         }
     }

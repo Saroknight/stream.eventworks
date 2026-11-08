@@ -26,6 +26,7 @@ use livekit::webrtc::video_frame::{EncodedFrameType, EncodedVideoCodec, EncodedV
 use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
 use serde::{Deserialize, Serialize};
+use tracing::{error, info, warn};
 
 pub use api::{Account, Api, Launch, SignedOut};
 pub use link::{AppLink, Joined};
@@ -35,7 +36,7 @@ pub use wincap::{audio_apps, list_monitors, AudioMode, Control, Monitor, VideoIn
 /// without picking one, the first secure (wss://) connection panics.
 pub fn init() {
     if rustls::crypto::aws_lc_rs::default_provider().install_default().is_err() {
-        log::info("a TLS backend was already chosen; keeping it");
+        info!("a TLS backend was already chosen; keeping it");
     }
 }
 
@@ -151,7 +152,7 @@ pub struct Session {
 impl Session {
     /// Older flow: an app link with a 12-hour ticket (still accepted by the server).
     pub async fn start(link: &AppLink, settings: &Settings, source: Source) -> Result<(Session, LiveInfo)> {
-        log::info(&format!("connecting to {} (room {})", link.base, link.room_id));
+        info!("connecting to {} (room {})", link.base, link.room_id);
         let joined = link::fetch_token(link).await?;
         Self::start_joined(&link.base, joined, settings, source).await
     }
@@ -163,7 +164,7 @@ impl Session {
         let (room, mut events) = Room::connect(&joined.livekit_url, &joined.token, room_options)
             .await
             .with_context(|| format!("could not connect to the media server at {}", joined.livekit_url))?;
-        log::info(&format!("connected to \"{}\" via {}", joined.title, joined.livekit_url));
+        info!("connected to \"{}\" via {}", joined.title, joined.livekit_url);
 
         let control = Arc::new(Control::default());
         let result = Self::publish(&room, &control, settings, source).await;
@@ -172,7 +173,7 @@ impl Session {
             Err(e) => {
                 control.stop.store(true, Ordering::Relaxed);
                 if let Err(close) = room.close().await {
-                    log::info(&format!("leaving the room after a failed start: {close}"));
+                    warn!("leaving the room after a failed start: {close}");
                 }
                 return Err(e);
             }
@@ -200,7 +201,7 @@ impl Session {
         let now = Instant::now();
         let live =
             LiveInfo { room_title: joined.title, server: server.to_string(), video: info.0, bitrate_mbps: settings.bitrate_mbps, audio: info.1 };
-        log::info(&format!(
+        info!(
             "live: {} {}x{} -> {}x{} @ {} fps, {} ({:.1} Mbps), GPU {}, audio {}",
             live.video.capture_method,
             live.video.source_width,
@@ -212,7 +213,7 @@ impl Session {
             live.bitrate_mbps,
             live.video.adapter,
             live.audio
-        ));
+        );
         Ok((Session { control, room, ended, threads, events, meter: Mutex::new(Meter { at: now, started: now, prev: (0, 0, 0, 0) }) }, live))
     }
 
@@ -313,18 +314,18 @@ impl Session {
                             if let Err(e) = rt.block_on(source.capture_frame(&frame)) {
                                 // Once, not 100 times a second.
                                 if failed == 0 {
-                                    log::info(&format!("sending sound failed: {e}"));
+                                    warn!("sending sound failed: {e}");
                                 }
                                 failed += 1;
                             }
                         }
                         if failed > 1 {
-                            log::info(&format!("sending sound failed {failed} times in all"));
+                            warn!("sending sound failed {failed} times in all");
                         }
                     })?);
                 }
                 Err(e) => {
-                    log::info(&format!("audio not available: {e:#}"));
+                    warn!("audio not available: {e:#}");
                     audio = "unavailable".into();
                 }
             }
@@ -362,10 +363,8 @@ impl Session {
         if let Some(m) = self.ended.lock().unwrap_or_else(PoisonError::into_inner).clone() {
             return Some(m);
         }
-        let errors = self.control.take_errors();
-        for e in &errors {
-            log::info(e);
-        }
+        // Already logged when reported; drained so they don't pile up.
+        self.control.take_errors();
         if let Some(why) = self.control.stopped_reason() {
             let msg = format!("Screen capture stopped: {why}");
             *self.ended.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg.clone());
@@ -381,22 +380,22 @@ impl Session {
         self.control.stop.store(true, Ordering::Relaxed);
         self.events.abort();
         if let Err(e) = self.room.close().await {
-            log::info(&format!("leaving the room: {e}"));
+            warn!("leaving the room: {e}");
         }
         let threads = self.threads;
         let joined = tokio::task::spawn_blocking(move || {
             for t in threads {
                 let name = t.thread().name().unwrap_or("capture").to_string();
                 if t.join().is_err() {
-                    log::info(&format!("the {name} thread crashed"));
+                    error!("the {name} thread crashed");
                 }
             }
         })
         .await;
         if let Err(e) = joined {
-            log::info(&format!("waiting for the capture threads: {e}"));
+            warn!("waiting for the capture threads: {e}");
         }
-        log::info("stopped");
+        info!("stopped");
     }
 }
 
@@ -445,7 +444,7 @@ pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
     control.stop.store(true, Ordering::Relaxed);
     drop(rx);
     if thread.join().is_err() {
-        log::info("the video thread crashed during the capture test");
+        error!("the video thread crashed during the capture test");
     }
     let st = &control.stats;
     let (captured, submitted) = (st.captured.load(Ordering::Relaxed), st.submitted.load(Ordering::Relaxed));

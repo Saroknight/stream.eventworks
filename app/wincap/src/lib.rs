@@ -119,7 +119,7 @@ impl Control {
         self.keyframe_requested.store(true, Ordering::Relaxed);
     }
     pub fn report_error(&self, msg: String) {
-        eprintln!("{msg}");
+        tracing::warn!("{msg}");
         self.errors.lock().unwrap_or_else(PoisonError::into_inner).push(msg);
     }
     pub fn take_errors(&self) -> Vec<String> {
