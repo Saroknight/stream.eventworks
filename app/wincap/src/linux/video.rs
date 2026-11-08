@@ -548,7 +548,7 @@ fn stream(run: Running, encoder: Encoder, control: &Control, tx: &SyncSender<Enc
         }
         apply_requests(control, &sink, &enc, encoder);
         let Some(sample) = next.take().or_else(|| sink.try_pull_sample(gst::ClockTime::from_mseconds(50))) else { continue };
-        if !send(&sample, control, tx, out) {
+        if !send(&sample, &pipeline, control, tx, out) {
             return;
         }
     }
@@ -566,8 +566,20 @@ fn apply_requests(control: &Control, sink: &gst_app::AppSink, enc: &gst::Element
     }
 }
 
+/// How long ago the encoded frame in `sample` was captured. The screen source stamps each
+/// frame with the pipeline's running time as it arrives (`do-timestamp` on pipewiresrc;
+/// ximagesrc always does). Encoders shift their output's timestamps (by 1000 hours, so decode
+/// times never go negative), so the stamp is turned back into running time with the sample's
+/// segment.
+fn since_capture(sample: &gst::Sample, pipeline: &gst::Pipeline) -> Option<Duration> {
+    let pts = sample.buffer()?.pts()?;
+    let captured = sample.segment()?.downcast_ref::<gst::ClockTime>()?.to_running_time(pts)?;
+    let age = pipeline.current_running_time()?.checked_sub(captured)?;
+    Some(Duration::from_nanos(age.nseconds()))
+}
+
 /// Sends one encoded frame on. Returns false once nobody is receiving.
-fn send(sample: &gst::Sample, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> bool {
+fn send(sample: &gst::Sample, pipeline: &gst::Pipeline, control: &Control, tx: &SyncSender<EncodedFrame>, out: (u32, u32)) -> bool {
     let Some(buf) = sample.buffer() else { return true };
     let Ok(map) = buf.map_readable() else { return true };
     let keyframe = !buf.flags().contains(gst::BufferFlags::DELTA_UNIT);
@@ -578,7 +590,11 @@ fn send(sample: &gst::Sample, control: &Control, tx: &SyncSender<EncodedFrame>, 
     if keyframe {
         s.keyframes.fetch_add(1, Ordering::Relaxed);
     }
-    let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us: now_us(), encode_latency_us: 0 };
+    let latency = since_capture(sample, pipeline).unwrap_or_default();
+    let latency_us = u32::try_from(latency.as_micros()).unwrap_or(u32::MAX);
+    s.last_latency_us.store(latency_us, Ordering::Relaxed);
+    let capture_unix_us = now_us() - i64::from(latency_us);
+    let frame = EncodedFrame { data: map.to_vec(), keyframe, width, height, capture_unix_us, encode_latency_us: latency_us };
     match tx.try_send(frame) {
         Ok(()) => true,
         Err(TrySendError::Full(_)) => {
