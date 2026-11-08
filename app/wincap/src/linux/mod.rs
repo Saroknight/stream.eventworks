@@ -10,4 +10,4 @@ mod video;
 
 pub use audio::{audio_apps, start_audio};
 pub use record::{recording, start_recording, stop_recording};
-pub use video::{list_monitors, start_video};
+pub use video::{list_monitors, screen_dialog, start_video};

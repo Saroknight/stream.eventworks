@@ -187,7 +187,13 @@ pub fn list_monitors() -> Vec<Monitor> {
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{audio_apps, list_monitors, recording, start_audio, start_recording, start_video, stop_recording};
+pub use linux::{audio_apps, list_monitors, recording, screen_dialog, start_audio, start_recording, start_video, stop_recording};
+
+/// Going live may show a "choose a screen" dialog from the desktop (Linux on Wayland only).
+#[cfg(not(target_os = "linux"))]
+pub fn screen_dialog() -> bool {
+    false
+}
 
 #[cfg(not(target_os = "linux"))]
 pub fn start_recording(_control: &Control, _with_audio: bool) -> anyhow::Result<std::path::PathBuf> {
