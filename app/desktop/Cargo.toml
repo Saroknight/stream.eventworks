@@ -25,3 +25,6 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[lints]
+workspace = true

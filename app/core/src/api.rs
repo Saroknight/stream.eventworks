@@ -181,7 +181,9 @@ impl Api {
     /// Tell the admin's Health panel something went wrong. Best effort.
     pub async fn report(&self, kind: &str, message: &str, room: Option<&str>) {
         let body = json!({ "kind": kind, "message": message, "room": room, "version": env!("CARGO_PKG_VERSION") });
-        let _ = self.call(reqwest::Method::POST, "/health/report", Some(body)).await;
+        if let Err(e) = self.call(reqwest::Method::POST, "/health/report", Some(body)).await {
+            crate::log::info(&format!("couldn't report \"{kind}\" to the server: {e:#}"));
+        }
     }
 }
 

@@ -19,3 +19,6 @@ tokio.workspace = true
 url.workspace = true
 wincap = { path = "../wincap" }
 openh264 = { version = "0.9", optional = true }
+
+[lints]
+workspace = true
