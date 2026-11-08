@@ -42,6 +42,16 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   leaked threads and PipeWire streams before 0.4.7). `pw-dump` is killed after 2 s. Per-app
   capture failing 3 times in a row shares no sound for 30 s (all PC audio would include
   Discord), then tries per-app again.
+- **Saving a copy** (`linux/record.rs`, Linux only, `CAN_RECORD`): the stream's own H.264 frames
+  plus its sound (Opus) into `matroskamux` → `~/Videos/Streamroom/<date time>.mkv`; no second
+  encode. Frames are handed over in `video.rs` `send()` / `audio.rs` before the network
+  `try_send`, so network drops are still saved. The recorder sits in `Control` (a slot), so
+  `Session::set_recording` turns it on/off mid-stream without a restart (on asks for a
+  keyframe; the file starts at one). Sound is timed by sample count, re-synced to the clock
+  after gaps; `matroskamux` (an aggregator) waits for both feeds, so the video thread fills in
+  silence when no sound comes (per-app fallback pause, sound pipeline restarts). Failures show
+  in the live view (`Stats::recording`) and the stream goes on. A killed app leaves a playable
+  file (no seek index).
 - **Updater on Linux:** downloads the package, verifies SHA256SUMS, `pkexec pacman -U`, relaunches.
 
 ### App behaviour shared by both

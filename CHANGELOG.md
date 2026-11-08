@@ -2,6 +2,10 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Linux 0.4.14: *Save a copy on this computer*: the stream (as sent, with sound) saved to
+   `~/Videos/Streamroom` as MKV, on/off in Settings and from the live view without restarting
+   the stream, failures shown in the live view; CLI `--record`. Windows gets the shared code
+   (setting hidden there), no Windows bump.
 - Linux 0.4.13: keyframe requests after dropped frames at most once a second, `log`-crate
    warnings (LiveKit, WebRTC, Tauri) in the log file, the unused capture error list removed,
    DMA-BUF use documented (it was already on with VA-API). Windows still has the log bridge and

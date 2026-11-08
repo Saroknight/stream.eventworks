@@ -41,6 +41,12 @@ echoed back), *Only certain apps* (tick them from the apps playing sound now), *
 PC audio and says so. On Linux it uses PipeWire (apps are matched by the program name PipeWire
 reports). Installs from before this setting keep sharing all PC audio until changed.
 
+**Save a copy (Linux):** Settings → *Save a copy on this computer* also saves what you stream to
+`~/Videos/Streamroom` as an MKV file (H.264 video as streamed, Opus sound), one file per go-live,
+named by date and time. While live, *Save a copy* / *Stop saving* turns it on or off without
+interrupting the stream. If saving fails (disk full, say) the live view says why and the stream
+carries on.
+
 **Screen on Linux (Wayland):** the desktop's own dialog picks the screen or window the first time;
 the app remembers it. Settings → Screen → *Ask every time* shows the dialog on every go-live.
 
@@ -97,6 +103,7 @@ Without a link it asks for one.
 | `--monitor 0` | Which monitor (0 = primary) |
 | `--no-audio` | Don't share PC audio |
 | `--no-cursor` | Don't draw the mouse cursor |
+| `--record` | Also save a copy in `~/Videos/Streamroom` (Linux) |
 | `--list-monitors` | List monitors and exit |
 | `--test-pattern` | Send a test pattern instead of the screen (troubleshooting) |
 | `--capture-test` | Capture and encode the screen for 5 seconds, no server needed |

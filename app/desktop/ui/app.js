@@ -8,6 +8,7 @@ let rooms = [];       // the lobby, refreshed while signed in
 let liveSince = 0;
 let lastStats = null;
 let lowFpsSeconds = 0;
+let recording = { state: 'off' }; // saving a copy of the stream (Linux)
 
 function toast(msg, ms = 2600) {
   $('toast').textContent = msg;
@@ -85,6 +86,8 @@ function render() {
     const scaled = v.width !== v.source_width ? ` (from ${v.source_width}×${v.source_height})` : '';
     $('details').textContent = `${v.width}×${v.height}${scaled} · ${v.fps} fps · ${v.encoder} · ${st.info.bitrate_mbps} Mbps · audio ${st.info.audio}`;
     lowFpsSeconds = 0;
+    recording = st.info.recording;
+    renderRecording();
     renderLiveRoom();
   } else {
     showState('ended');
@@ -160,7 +163,39 @@ function renderStats(s) {
   $('sEnc').textContent = s.encode_ms ? s.encode_ms.toFixed(1) : '–';
   lowFpsSeconds = s.capture_fps < 10 ? lowFpsSeconds + 1 : 0;
   $('stillHint').classList.toggle('hidden', lowFpsSeconds < 4);
+  recording = s.recording;
+  renderRecording();
 }
+
+// ---------- saving a copy ----------
+const REC_TEXT = {
+  on: (r) => `Saving a copy: ${r.path}`,
+  failed: (r) => `Saving stopped: ${r.why}`,
+  off: () => 'Not saving a copy',
+};
+const REC_BUTTON = { on: 'Stop saving', failed: 'Try again', off: 'Save a copy' };
+function renderRecording() {
+  $('recordRow').classList.toggle('hidden', !snap.can_record);
+  $('recordBox').checked = Boolean(snap.settings.record);
+  $('recRow').classList.toggle('hidden', !snap.can_record);
+  $('recRow').classList.toggle('failed', recording.state === 'failed');
+  $('recText').textContent = REC_TEXT[recording.state](recording);
+  $('recBtn').textContent = REC_BUTTON[recording.state];
+}
+async function setRecording(on) {
+  $('recBtn').disabled = true;
+  $('recordBox').disabled = true;
+  try {
+    const r = await call('set_recording', { on });
+    snap.settings.record = on;
+    if (snap.status.kind === 'live') recording = r;
+  } catch { /* toasted */ }
+  $('recBtn').disabled = false;
+  $('recordBox').disabled = false;
+  renderRecording();
+}
+$('recBtn').onclick = () => setRecording(recording.state !== 'on');
+$('recordBox').onchange = () => setRecording($('recordBox').checked);
 
 setInterval(() => {
   if (!liveSince || snap?.status?.kind !== 'live') return;
@@ -189,6 +224,7 @@ function renderSettings() {
     else el.value = String(v);
   });
   renderAudio();
+  renderRecording();
 }
 
 // ---------- sound ----------
