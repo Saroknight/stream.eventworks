@@ -29,6 +29,7 @@ pub fn parse(input: &str) -> Result<AppLink> {
     let fixed = if input.contains("://") { input.to_string() } else { format!("https://{input}") };
     let url = url::Url::parse(&fixed).context("that doesn't look like a link")?;
     let host = url.host_str().ok_or_else(|| anyhow!("link has no host"))?;
+    check_secure(&url)?;
     let base = match url.port() {
         Some(p) => format!("{}://{}:{}", url.scheme(), host, p),
         None => format!("{}://{}", url.scheme(), host),
@@ -46,6 +47,18 @@ pub fn parse(input: &str) -> Result<AppLink> {
         .ok_or_else(|| anyhow!("the link is incomplete (missing the part after #k=). Copy it again."))?
         .to_string();
     Ok(AppLink { base, room_id, ticket })
+}
+
+/// The servers the app talks to: https, or plain http on this computer only (local development).
+/// Over plain http anywhere else, the sign-in key and tickets would travel unprotected.
+pub(crate) fn check_secure(server: &url::Url) -> Result<()> {
+    let this_computer = matches!(server.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    match server.scheme() {
+        "https" => Ok(()),
+        "http" if this_computer => Ok(()),
+        "http" => bail!("that link names a server that isn't secure (http)"),
+        _ => bail!("that link names a server I can't read"),
+    }
 }
 
 #[derive(Deserialize)]

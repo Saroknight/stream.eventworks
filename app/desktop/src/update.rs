@@ -4,6 +4,8 @@
 //! Linux (Arch): the pacman package, installed with `pkexec pacman -U` (the desktop asks for
 //! the password), then the new version is started.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -86,8 +88,8 @@ pub async fn check() -> Result<Option<Available>> {
 }
 
 /// Downloads and verifies the installer, starts it (after this app exits), and returns.
-/// The caller should exit right after.
-pub async fn install(a: &Available) -> Result<()> {
+/// The caller should exit right after. `cache`: the app's cache folder.
+pub async fn install(a: &Available, cache: &Path) -> Result<()> {
     let c = client()?;
     let sums = c.get(&a.sums_url).send().await?.error_for_status()?.text().await?;
     let expected = sums
@@ -101,15 +103,39 @@ pub async fn install(a: &Available) -> Result<()> {
     if actual != expected {
         bail!("the downloaded installer didn't match its checksum, so it wasn't run");
     }
-    let setup = std::env::temp_dir().join(format!("{}-{}", a.version, SETUP));
+    let (cache, name) = (cache.to_path_buf(), format!("{}-{}", a.version, SETUP));
     // Saving and installing block (on Linux until the password is typed): keep them off the
     // async runtime.
     tokio::task::spawn_blocking(move || {
+        let setup = download_dir(&cache).context("making a folder for the installer")?.join(name);
         std::fs::write(&setup, &bytes).context("saving the installer")?;
         run_after_exit(&setup)
     })
     .await
     .context("installing the update")?
+}
+
+/// Where the installer is saved: `update/` in the app's cache folder, made fresh each time and
+/// open to this user only. It's installed as root, so it mustn't sit under a name other users
+/// could take or swap (as in the shared temp folder).
+#[cfg(unix)]
+fn download_dir(cache: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let dir = cache.join("update");
+    match std::fs::remove_dir_all(&dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e).with_context(|| format!("emptying {}", dir.display())),
+        Ok(()) | Err(_) => {}
+    }
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    // The mode above is cut down by the umask but never widened; this sets it exactly.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).with_context(|| format!("restricting {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Windows: the user's own temp folder, as before.
+#[cfg(not(unix))]
+fn download_dir(_cache: &Path) -> Result<PathBuf> {
+    Ok(std::env::temp_dir())
 }
 
 /// Install the package (pacman asks for the password through the desktop), then start the new
@@ -162,6 +188,27 @@ fn run_after_exit(_setup: &std::path::Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// The package is installed as root: its folder is ours alone and holds nothing left over.
+    #[cfg(unix)]
+    #[test]
+    fn the_download_folder_is_private_and_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let cache = std::env::temp_dir().join(format!("streamroom-update-test-{}", std::process::id()));
+        let dir = cache.join("update");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::write(dir.join("left-over.pkg.tar.zst"), b"old").unwrap();
+
+        assert_eq!(super::download_dir(&cache).unwrap(), dir);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        // And when there was no folder yet.
+        std::fs::remove_dir_all(&cache).unwrap();
+        assert_eq!(super::download_dir(&cache).unwrap(), dir);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::remove_dir_all(&cache).unwrap();
+    }
+
     #[test]
     fn compares_versions() {
         assert!(super::newer("app-v0.2.1", "0.2.0"));

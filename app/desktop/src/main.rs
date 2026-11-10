@@ -19,7 +19,8 @@ use std::time::Duration;
 use serde::Serialize;
 use streamroom_core::api::parse_launch;
 use streamroom_core::{
-    log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LiveInfo, Monitor, Recording, Session, Settings, SignedOut, Source, CAN_RECORD,
+    link_action, log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LinkAction, LiveInfo, Monitor, Recording, Session, Settings, SignedOut,
+    Source, CAN_RECORD,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -54,6 +55,22 @@ struct AppState {
     settings: Mutex<Settings>,
     update: Mutex<Option<update::Available>>,
     tray_stop: Mutex<Option<MenuItem<Wry>>>,
+    /// A link waiting for the user to say yes (see `launch`).
+    pending: Mutex<Option<Pending>>,
+}
+
+/// A link for a server this PC isn't signed in to, and what the window asks about it.
+struct Pending {
+    launch: Launch,
+    view: ConfirmView,
+}
+
+/// "Sign in to `host`?" in the window.
+#[derive(Clone, Serialize)]
+struct ConfirmView {
+    host: String,
+    /// The server this PC would be signed out of by continuing.
+    signs_out_of: Option<String>,
 }
 
 /// What the window may know about the sign-in (never the key).
@@ -86,6 +103,8 @@ struct Snapshot {
     can_record: bool,
     /// Going live may show the desktop's "choose a screen" dialog (Linux on Wayland).
     screen_dialog: bool,
+    /// A link is waiting for a yes or no.
+    confirm: Option<ConfirmView>,
 }
 
 // ---------- status ----------
@@ -226,10 +245,36 @@ async fn end(app: &AppHandle, reason: Option<String>) {
     );
 }
 
-/// A link from the site (or pasted): sign in with its code if it has one, then go live in its
-/// room if it names one.
+/// A link from the site (or pasted). Any web page can open one, so a link for a server this PC
+/// isn't signed in to waits for a yes in the window before anything is sent there.
 async fn launch(app: AppHandle, l: Launch) -> Result<(), String> {
     show_main(&app);
+    let current = account_view(&current_account(&app));
+    match link_action(current.as_ref().map(|a| a.server.as_str()), &l) {
+        LinkAction::Proceed => follow(app, l).await,
+        LinkAction::Confirm { host } => {
+            info!("asking before using a link for {host}");
+            // Only a new sign-in replaces the current one; an older link just streams there.
+            let signs_out_of = current.filter(|_| matches!(l, Launch::Open { .. })).map(|a| a.host);
+            set_pending(&app, Some(Pending { launch: l, view: ConfirmView { host, signs_out_of } }));
+            Ok(())
+        }
+    }
+}
+
+/// Keeps (or clears) the link waiting for a yes, and tells the window. Returns the one before.
+fn set_pending(app: &AppHandle, pending: Option<Pending>) -> Option<Pending> {
+    let view = pending.as_ref().map(|p| p.view.clone());
+    let before = std::mem::replace(&mut *app.state::<AppState>().pending.lock().unwrap_or_else(PoisonError::into_inner), pending);
+    if let Err(e) = app.emit("confirm", view) {
+        warn!("couldn't tell the window about the link: {e}");
+    }
+    before
+}
+
+/// Acts on a link: sign in with its code if it has one, then go live in its room if it names
+/// one.
+async fn follow(app: AppHandle, l: Launch) -> Result<(), String> {
     let (server, room, pair) = match l {
         Launch::Legacy(link) => {
             begin(app, Target::Legacy(link)).await;
@@ -368,6 +413,7 @@ fn get_state(state: State<'_, AppState>) -> Snapshot {
         log_path: log::path().display().to_string(),
         can_record: CAN_RECORD,
         screen_dialog: streamroom_core::screen_dialog(),
+        confirm: state.pending.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|p| p.view.clone()),
     }
 }
 
@@ -382,6 +428,15 @@ async fn audio_apps() -> Vec<String> {
 async fn start_link(app: AppHandle, link: String) -> Result<(), String> {
     let l = parse_launch(&link).map_err(|e| format!("{e:#}"))?;
     launch(app, l).await
+}
+
+/// The answer to "Sign in to <host>?": go ahead with the waiting link, or drop it.
+#[tauri::command]
+async fn confirm_link(app: AppHandle, accept: bool) -> Result<(), String> {
+    match set_pending(&app, None) {
+        Some(p) if accept => follow(app, p.launch).await,
+        Some(_) | None => Ok(()),
+    }
 }
 
 /// The lobby, as the site shows it.
@@ -554,7 +609,8 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     }
     let a = app.state::<AppState>().update.lock().unwrap_or_else(PoisonError::into_inner).clone().ok_or("No update available.")?;
     info!("installing update {}", a.version);
-    update::install(&a).await.map_err(|e| format!("{e:#}"))?;
+    let cache = app.path().app_cache_dir().map_err(|e| format!("No folder to download the update to: {e}"))?;
+    update::install(&a, &cache).await.map_err(|e| format!("{e:#}"))?;
     app.exit(0);
     Ok(())
 }
@@ -582,10 +638,12 @@ fn main() {
             settings: Mutex::new(Settings::default()),
             update: Mutex::new(None),
             tray_stop: Mutex::new(None),
+            pending: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
             start_link,
+            confirm_link,
             stop,
             restart,
             dismiss,

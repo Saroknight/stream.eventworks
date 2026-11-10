@@ -56,6 +56,17 @@
       <div class="rooms" id="rooms"></div>
     </section>
 
+    <!-- a link for a server this PC isn't signed in to -->
+    <section class="panel state hidden" data-state="confirm">
+      <h1 id="confirmTitle"></h1>
+      <p class="muted">Only continue if you opened this from that site.</p>
+      <p class="muted small hidden" id="confirmSignsOut"></p>
+      <div class="row">
+        <button class="btn" id="confirmNoBtn">Cancel</button>
+        <button class="btn primary" id="confirmYesBtn">Continue</button>
+      </div>
+    </section>
+
     <!-- connecting -->
     <section class="panel state hidden" data-state="connecting">
       <div class="spinner"></div>

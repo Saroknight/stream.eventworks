@@ -28,7 +28,7 @@ use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
-pub use api::{Account, Api, Launch, SignedOut};
+pub use api::{link_action, Account, Api, Launch, LinkAction, SignedOut};
 pub use link::{AppLink, Joined};
 pub use wincap::{audio_apps, list_monitors, screen_dialog, AudioMode, Control, Monitor, Recording, VideoInfo, CAN_RECORD};
 
@@ -91,12 +91,17 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn audio_mode(&self) -> wincap::AudioMode {
+    /// Which sound to share, or `None` for no sound: sound is off, or it's "only certain apps"
+    /// with none chosen (sharing everything instead would include Discord).
+    pub fn audio_mode(&self) -> Option<wincap::AudioMode> {
+        if !self.audio {
+            return None;
+        }
         match self.audio_mode {
-            AudioChoice::All => wincap::AudioMode::All,
-            AudioChoice::Apps if !self.audio_apps.is_empty() => wincap::AudioMode::Apps(self.audio_apps.clone()),
-            AudioChoice::Apps => wincap::AudioMode::All,
-            AudioChoice::ExceptDiscord => wincap::AudioMode::ExceptDiscord,
+            AudioChoice::All => Some(wincap::AudioMode::All),
+            AudioChoice::Apps if self.audio_apps.is_empty() => None,
+            AudioChoice::Apps => Some(wincap::AudioMode::Apps(self.audio_apps.clone())),
+            AudioChoice::ExceptDiscord => Some(wincap::AudioMode::ExceptDiscord),
         }
     }
 
@@ -106,7 +111,9 @@ impl Settings {
     }
 
     fn video_options(&self) -> wincap::VideoOptions {
-        wincap::VideoOptions { height: self.height, fps: self.fps, bitrate_bps: self.bitrate_bps(), monitor: self.monitor, cursor: self.cursor }
+        // Held to what screens and encoders can do, like the bitrate: the file can be edited by hand.
+        let height = if self.height == 0 { 0 } else { self.height.clamp(144, 4320) };
+        wincap::VideoOptions { height, fps: self.fps.clamp(1, 240), bitrate_bps: self.bitrate_bps(), monitor: self.monitor, cursor: self.cursor }
     }
 }
 
@@ -333,9 +340,13 @@ impl Session {
         // PC audio: everything, everything except Discord, or only chosen apps.
         let mut audio = "off".to_string();
         let mut has_audio = false;
-        if settings.audio && source == Source::Screen {
+        let mode = if source == Source::Screen { settings.audio_mode() } else { None };
+        if mode.is_none() && settings.audio && source == Source::Screen {
+            audio = "off (no apps chosen)".into();
+        }
+        if let Some(mode) = mode {
             let (audio_tx, audio_rx) = mpsc::sync_channel::<wincap::AudioChunk>(50);
-            match wincap::start_audio(control.clone(), audio_tx, settings.audio_mode()) {
+            match wincap::start_audio(control.clone(), audio_tx, mode) {
                 Ok((handle, what)) => {
                     threads.push(handle);
                     audio = what;
@@ -535,6 +546,29 @@ mod tests {
             assert_eq!(serde_json::to_string(&choice).unwrap(), json);
             assert_eq!(serde_json::from_str::<AudioChoice>(&json).unwrap(), choice);
         }
+    }
+
+    #[test]
+    fn frame_rate_and_height_are_held_to_sane_values() {
+        let opts = |fps, height| Settings { fps, height, ..Default::default() }.video_options();
+        assert_eq!(opts(0, 1080).fps, 1);
+        assert_eq!(opts(100_000, 1080).fps, 240);
+        assert_eq!(opts(60, 1080).fps, 60);
+        assert_eq!(opts(60, 0).height, 0, "0 means the screen's own size");
+        assert_eq!(opts(60, 10).height, 144);
+        assert_eq!(opts(60, 1_000_000).height, 4320);
+        assert_eq!(opts(60, 1440).height, 1440);
+    }
+
+    #[test]
+    fn only_certain_apps_with_none_chosen_shares_no_sound() {
+        let with =
+            |audio_mode, apps: &[&str]| Settings { audio_mode, audio_apps: apps.iter().map(|a| a.to_string()).collect(), ..Default::default() };
+        assert_eq!(with(AudioChoice::Apps, &[]).audio_mode(), None, "not all PC audio: that would include Discord");
+        assert_eq!(with(AudioChoice::Apps, &["game"]).audio_mode(), Some(wincap::AudioMode::Apps(vec!["game".into()])));
+        assert_eq!(with(AudioChoice::All, &[]).audio_mode(), Some(wincap::AudioMode::All));
+        assert_eq!(with(AudioChoice::ExceptDiscord, &["game"]).audio_mode(), Some(wincap::AudioMode::ExceptDiscord));
+        assert_eq!(Settings { audio: false, ..Default::default() }.audio_mode(), None);
     }
 
     #[test]

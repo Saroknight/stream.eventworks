@@ -140,7 +140,7 @@ fn pipeline_text(screen: &Screen, target: &str, enc: Encoder, opts: &VideoOption
         src = screen.source(target, fps),
         convert = enc.convert(&size),
         element = enc.element(),
-        settings = enc.settings(kbps, fps * 2),
+        settings = enc.settings(kbps, fps.saturating_mul(2)),
     )
 }
 

@@ -52,9 +52,12 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   silence when no sound comes (per-app fallback pause, sound pipeline restarts). Failures show
   in the live view (`Stats::recording`) and the stream goes on. A killed app leaves a playable
   file (no seek index).
-- **Updater on Linux:** downloads the package, verifies SHA256SUMS, `pkexec pacman -U`, relaunches.
+- **Updater on Linux:** downloads the package (to a private `update/` in the app's cache folder), verifies SHA256SUMS, `pkexec pacman -U`, relaunches.
 
 ### App behaviour shared by both
+- A link for a server this PC isn't signed in to (new sign-in code or older `#k=` link) waits
+  for a yes in the window before anything is sent there (`link_action` in `core/src/api.rs`):
+  any web page can open a `streamroom://` link. Plain `http://` servers only on this computer.
 - Tray app, single instance; a second `streamroom://` link is handed to the running instance
   (with 10-second de-duplication; links are redacted in logs).
 - After pairing, the app lists rooms, creates/ends rooms, goes live, opens rooms in the browser,
@@ -63,8 +66,8 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
   mid-stream. "Copy diagnostics" copies a JSON snapshot (version, status, settings, monitors,
   stats, log path).
 - Logs: Linux `~/.local/share/click.eventworks.streamroom/logs/streamroom-live.log`, Windows
-  under `%LOCALAPPDATA%\click.eventworks.streamroom\logs\` (the CLI: `streamroom-live.log` in the
-  temp folder). Code logs with `tracing`; `core::log::init` sends it to the file through a
+  under `%LOCALAPPDATA%\click.eventworks.streamroom\logs\` (the CLI: `streamroom-live.log` in
+  `~/.local/state/streamroom-live/` on Linux, the temp folder on Windows). Code logs with `tracing`; `core::log::init` sends it to the file through a
   background writer (our crates from `info`, others from `warn`, including `log`-crate users
   like LiveKit through the `tracing-log` bridge), and `log::flush()` must run before exiting
   (the app does it on `RunEvent::Exit`, the CLI before `process::exit`) or the last lines are

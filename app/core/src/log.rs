@@ -67,13 +67,40 @@ pub fn path() -> PathBuf {
     PATH.get().cloned().unwrap_or_else(default_path)
 }
 
+/// Where the log goes when the caller names no file (the console tool). On Linux that's the
+/// user's own state folder: the temp folder is shared, so the name could be taken, or the log
+/// read, by other users.
 fn default_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(dir) = state_dir(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME")) {
+        return dir.join("streamroom-live").join("streamroom-live.log");
+    }
     std::env::temp_dir().join("streamroom-live.log")
+}
+
+/// The user's state folder: `$XDG_STATE_HOME` if it's an absolute path (the XDG rule), else
+/// `~/.local/state`; `None` without a home folder.
+#[cfg(target_os = "linux")]
+fn state_dir(xdg_state_home: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let absolute = |dir: std::ffi::OsString| Some(PathBuf::from(dir)).filter(|p| p.is_absolute());
+    xdg_state_home.and_then(absolute).or_else(|| home.and_then(absolute).map(|h| h.join(".local/state")))
 }
 
 #[cfg(test)]
 mod tests {
     use tracing::Level;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_default_log_is_in_the_users_state_folder() {
+        use std::path::PathBuf;
+        let dir = |xdg: Option<&str>, home: Option<&str>| super::state_dir(xdg.map(Into::into), home.map(Into::into));
+        assert_eq!(dir(Some("/data/state"), Some("/home/u")), Some(PathBuf::from("/data/state")));
+        assert_eq!(dir(None, Some("/home/u")), Some(PathBuf::from("/home/u/.local/state")));
+        assert_eq!(dir(Some(""), Some("/home/u")), Some(PathBuf::from("/home/u/.local/state")), "empty counts as unset");
+        assert_eq!(dir(Some("relative"), Some("/home/u")), Some(PathBuf::from("/home/u/.local/state")));
+        assert_eq!(dir(None, None), None, "then the temp folder is used");
+    }
 
     #[test]
     fn our_crates_log_info_others_only_warnings() {

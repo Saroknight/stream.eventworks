@@ -41,15 +41,42 @@ pub fn parse_launch(input: &str) -> Result<Launch> {
         let get = |k: &str| u.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.into_owned()).filter(|v| !v.is_empty());
         if let Some(server) = get("server") {
             let s = url::Url::parse(&server).map_err(|_| anyhow!("that link names a server I can't read"))?;
-            if !matches!(s.scheme(), "https" | "http") || s.host_str().is_none() {
+            if s.host_str().is_none() {
                 bail!("that link names a server I can't read");
             }
+            link::check_secure(&s)?;
             let server = server.trim_end_matches('/').to_string();
             let room = get("room").filter(|r| r.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
             return Ok(Launch::Open { server, room, pair: get("pair") });
         }
     }
     link::parse(input).map(Launch::Legacy)
+}
+
+/// What to do with a link before anything is sent anywhere.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LinkAction {
+    /// Carry on: the link is for the server this PC is signed in to, or sends nothing.
+    Proceed,
+    /// Ask first: the link would sign in to, or stream to, a server this PC isn't signed in to.
+    /// Any web page can open a link, so the link alone doesn't show the user wanted that.
+    Confirm { host: String },
+}
+
+/// Decides whether `launch` may go ahead. `signed_in`: the server this PC is signed in to.
+pub fn link_action(signed_in: Option<&str>, launch: &Launch) -> LinkAction {
+    let server = match launch {
+        // Without a sign-in code nothing is sent to a server we aren't signed in to: the app
+        // says to sign in there instead.
+        Launch::Open { pair: None, .. } => return LinkAction::Proceed,
+        Launch::Open { server, pair: Some(_), .. } => server,
+        Launch::Legacy(link) => &link.base,
+    };
+    if signed_in == Some(server.as_str()) {
+        LinkAction::Proceed
+    } else {
+        LinkAction::Confirm { host: server.split("://").nth(1).unwrap_or(server).to_string() }
+    }
 }
 
 /// Saved after pairing. The desktop app stores it encrypted for the Windows user.
@@ -192,6 +219,46 @@ impl Api {
 mod tests {
     use super::*;
 
+    const HOME: &str = "https://stream.eventworks.click";
+
+    fn open(server: &str, pair: Option<&str>) -> Launch {
+        Launch::Open { server: server.into(), room: Some("r".into()), pair: pair.map(str::to_string) }
+    }
+
+    fn legacy(base: &str) -> Launch {
+        Launch::Legacy(AppLink { base: base.into(), room_id: "r".into(), ticket: "t".into() })
+    }
+
+    fn ask(host: &str) -> LinkAction {
+        LinkAction::Confirm { host: host.into() }
+    }
+
+    #[test]
+    fn links_to_the_signed_in_server_go_ahead() {
+        assert_eq!(link_action(Some(HOME), &open(HOME, Some("code"))), LinkAction::Proceed);
+        assert_eq!(link_action(Some(HOME), &open(HOME, None)), LinkAction::Proceed);
+        assert_eq!(link_action(Some(HOME), &legacy(HOME)), LinkAction::Proceed);
+    }
+
+    /// Any web page can open a link: one naming another server must not sign in or stream
+    /// there on its own.
+    #[test]
+    fn links_to_another_server_ask_first() {
+        for signed_in in [None, Some(HOME)] {
+            assert_eq!(link_action(signed_in, &open("https://evil.example", Some("code"))), ask("evil.example"), "{signed_in:?}");
+            assert_eq!(link_action(signed_in, &legacy("https://evil.example:8443")), ask("evil.example:8443"), "{signed_in:?}");
+        }
+        assert_eq!(link_action(None, &open(HOME, Some("code"))), ask("stream.eventworks.click"), "the first sign-in asks too");
+        assert_eq!(link_action(None, &legacy(HOME)), ask("stream.eventworks.click"));
+    }
+
+    /// No sign-in code: nothing is sent to that server (the app says to sign in there).
+    #[test]
+    fn links_without_a_code_send_nothing_so_dont_ask() {
+        assert_eq!(link_action(Some(HOME), &open("https://evil.example", None)), LinkAction::Proceed);
+        assert_eq!(link_action(None, &open(HOME, None)), LinkAction::Proceed);
+    }
+
     #[test]
     fn parses_launch_links() {
         let l = parse_launch("streamroom://open?server=https%3A%2F%2Fstream.eventworks.click&room=AbC-12&pair=x.y").unwrap();
@@ -202,7 +269,13 @@ mod tests {
         let l = parse_launch("streamroom://open?server=https://a.b&room=../admin").unwrap();
         assert_eq!(l, Launch::Open { server: "https://a.b".into(), room: None, pair: None });
         assert!(parse_launch("streamroom://open?server=javascript:alert(1)").is_err());
+        // A plain http server is only for local development: the key would travel unprotected.
+        assert!(parse_launch("streamroom://open?server=http://example.com&room=r&pair=c").is_err());
+        assert!(parse_launch("streamroom://open?server=http://127.0.0.1:3000").is_ok());
+        assert!(parse_launch("http://example.com/live/AbC#k=t").is_err());
+        assert!(parse_launch("ftp://example.com/live/AbC#k=t").is_err());
         // Old links still work.
+        assert!(matches!(parse_launch("http://localhost:3000/live/AbC#k=t").unwrap(), Launch::Legacy(_)));
         assert!(matches!(parse_launch("https://stream.eventworks.click/live/AbC#k=t").unwrap(), Launch::Legacy(_)));
         assert!(matches!(parse_launch("streamroom://open?link=http%3A%2F%2Flocalhost%3A3000%2Flive%2FR%23k%3Dk").unwrap(), Launch::Legacy(_)));
     }
