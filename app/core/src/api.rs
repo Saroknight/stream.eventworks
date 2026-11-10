@@ -79,7 +79,8 @@ pub fn link_action(signed_in: Option<&str>, launch: &Launch) -> LinkAction {
     }
 }
 
-/// Saved after pairing. The desktop app stores it encrypted for the Windows user.
+/// Saved after pairing. The desktop app stores it for this user only (Windows: encrypted;
+/// Linux: a file only this user can read).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Account {
     pub server: String,
@@ -100,6 +101,7 @@ impl std::fmt::Display for SignedOut {
 }
 impl std::error::Error for SignedOut {}
 
+#[derive(Clone)]
 pub struct Api {
     pub server: String,
     key: Option<String>,
@@ -122,14 +124,7 @@ struct UserReply {
 
 impl Api {
     pub fn new(server: &str, key: Option<String>) -> Result<Self> {
-        Ok(Api {
-            server: server.trim_end_matches('/').to_string(),
-            key,
-            http: reqwest::Client::builder()
-                .user_agent(concat!("streamroom-live/", env!("CARGO_PKG_VERSION")))
-                .timeout(std::time::Duration::from_secs(20))
-                .build()?,
-        })
+        Ok(Api { server: server.trim_end_matches('/').to_string(), key, http: crate::http_client()? })
     }
 
     pub fn for_account(a: &Account) -> Result<Self> {
@@ -171,13 +166,6 @@ impl Api {
             self.call(reqwest::Method::POST, "/app/pair", Some(json!({ "code": code, "deviceKey": existing, "deviceName": device_name }))).await?;
         let r: PairReply = serde_json::from_value(v).context("unexpected reply from the server")?;
         Ok(Account { server: self.server.clone(), user_id: r.user.id, user_name: r.user.name, is_admin: r.user.is_admin, device_key: r.device_key })
-    }
-
-    /// Checks the key still works; returns the (possibly renamed) user.
-    pub async fn me(&self) -> Result<(String, String, bool)> {
-        let v = self.call(reqwest::Method::GET, "/app/me", None).await?;
-        let u: UserReply = serde_json::from_value(v["user"].clone()).context("unexpected reply from the server")?;
-        Ok((u.id, u.name, u.is_admin))
     }
 
     /// The lobby: `[{id, title, createdAt, creator{name}, isCreator, canEnd, live[{name,kind}], here}]`.
