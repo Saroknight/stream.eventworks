@@ -82,7 +82,38 @@ pub fn next_error(bus: &gst::Bus, wait: gst::ClockTime) -> Option<PipelineError>
     bus.timed_pop_filtered(wait, &[gst::MessageType::Error]).as_ref().and_then(PipelineError::from_message)
 }
 
+/// Sets `pipeline` playing. When an element refuses, `set_state` only says "failed": the real
+/// reason (which element, and why) is on the bus, and is the error returned (a
+/// [`PipelineError`]).
+pub fn play(pipeline: &gst::Pipeline) -> Result<()> {
+    if pipeline.set_state(gst::State::Playing).is_ok() {
+        return Ok(());
+    }
+    match pipeline.bus().and_then(|bus| next_error(&bus, gst::ClockTime::from_seconds(1))) {
+        Some(why) => Err(why.into()),
+        None => Err(anyhow!("an element refused to start (no details)")),
+    }
+}
+
 /// The GStreamer element `name` is installed.
 pub fn available(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `set_state` only says "failed"; which element refused, and why, is on the bus.
+    #[test]
+    fn a_refused_start_says_which_element_and_why() {
+        gst::init().unwrap();
+        let pipeline = gst::parse::launch("filesrc name=missing location=/nonexistent/streamroom-test ! fakesink").unwrap();
+        let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
+        let e = play(&pipeline).unwrap_err();
+        pipeline.set_state(gst::State::Null).unwrap();
+        let why = e.downcast_ref::<PipelineError>().expect("the element's own error");
+        assert!(why.element.ends_with("missing"), "{why}");
+        assert!(!why.message.is_empty());
+    }
 }

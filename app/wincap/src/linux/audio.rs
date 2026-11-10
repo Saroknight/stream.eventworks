@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 
-use super::launch::{launch, next_error};
+use super::launch::{launch, next_error, play};
 use super::record;
 use crate::{AudioChunk, AudioMode, Control};
 
@@ -148,6 +148,16 @@ fn plan(mode: &AudioMode) -> Result<Plan> {
     }
 }
 
+/// Whether the running capture (`current`) still matches what should be captured `now`. A
+/// check that failed changes nothing: working sound isn't torn down because PipeWire couldn't
+/// be asked once.
+fn still_fits(current: &Plan, now: &Result<Plan>) -> bool {
+    match now {
+        Ok(plan) => plan == current,
+        Err(_) => true,
+    }
+}
+
 /// What `mode` shares, in words for the app.
 fn describe(mode: &AudioMode) -> String {
     match mode {
@@ -224,13 +234,14 @@ fn pause(control: &Control, time: Duration) {
 }
 
 /// Runs one pipeline until the plan changes (apps start/stop) or we're
-/// stopped. The pipeline is shut down however this exits.
+/// stopped. A plan check that fails keeps the pipeline (see `still_fits`). The pipeline is shut down however this exits.
 fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p: &Plan) -> Result<()> {
     let (pipeline, sink) = launch(&pipeline_text(p), "audio", control)?;
-    pipeline.set_state(gst::State::Playing).context("starting audio")?;
+    play(&pipeline).context("starting audio")?;
     let bus = pipeline.bus();
     let mut pending: Vec<i16> = Vec::with_capacity(CHUNK * 4);
     let mut last_check = Instant::now();
+    let mut check_failing = false;
     loop {
         if control.stop.load(Ordering::Relaxed) {
             break Ok(());
@@ -240,9 +251,15 @@ fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p:
         }
         if !matches!(mode, AudioMode::All) && last_check.elapsed() > Duration::from_secs(3) {
             last_check = Instant::now();
-            if plan(mode)? != *p {
+            let now = plan(mode);
+            if !still_fits(p, &now) {
                 break Ok(());
             }
+            // Said once, not every few seconds while it lasts.
+            if let (Err(e), false) = (&now, check_failing) {
+                control.report_error(format!("couldn't check which apps are playing sound, so the same ones stay shared: {e:#}"));
+            }
+            check_failing = now.is_err();
         }
         let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(50)) else { continue };
         let Some(buf) = sample.buffer() else { continue };
@@ -263,7 +280,7 @@ fn run(control: &Arc<Control>, tx: &SyncSender<AudioChunk>, mode: &AudioMode, p:
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_app_streams, AppStream};
+    use super::{parse_app_streams, still_fits, AppStream, Plan};
 
     /// Trimmed `pw-dump` output: two playing app streams, our own stream, a sink, a stream with
     /// no binary name and an idle (paused) one.
@@ -289,6 +306,16 @@ mod tests {
     fn lists_app_output_streams_except_our_own() {
         let list = parse_app_streams(PW_DUMP.as_bytes(), "777").unwrap();
         assert_eq!(list, vec![AppStream { serial: 812, app: "discord".into() }, AppStream { serial: 830, app: "firefox".into() }]);
+    }
+
+    /// One failed `pw-dump` used to tear down working sound (and count towards sharing none).
+    #[test]
+    fn a_failed_check_keeps_the_sound_running() {
+        let running = Plan::Streams(vec![812, 830]);
+        assert!(still_fits(&running, &Ok(Plan::Streams(vec![812, 830]))));
+        assert!(!still_fits(&running, &Ok(Plan::Streams(vec![812]))), "an app stopped: start over");
+        assert!(!still_fits(&running, &Ok(Plan::Streams(vec![812, 830, 900]))), "an app started: start over");
+        assert!(still_fits(&running, &Err(anyhow::anyhow!("pw-dump didn't answer"))));
     }
 
     #[test]

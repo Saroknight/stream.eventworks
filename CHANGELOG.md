@@ -2,6 +2,10 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Linux 0.4.20: working sound is no longer restarted (or paused for 30 s) when one check of
+   which apps are playing fails; a sound pipeline that won't start now says which part refused
+   and why; the remembered-screen token is readable by this user only; the package now requires
+   `pipewire-pulse` (all PC audio) and `xdg-utils` (opening the browser and the log folder).
 - Windows 0.4.6 / Linux 0.4.19: security fixes. A link for a server this PC isn't signed in to
    now asks first ("Sign in to <host>?") instead of signing in and going live there on its own
    (any web page can open a `streamroom://` link); plain `http://` servers are only accepted on

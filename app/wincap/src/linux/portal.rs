@@ -3,7 +3,7 @@
 //! portal to remember the choice (a restore token), so the dialog appears once, not every time.
 
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -69,10 +69,26 @@ fn token_path() -> Option<PathBuf> {
 
 fn save_token(token: &str) -> Result<()> {
     let p = token_path().context("no home folder to save it in")?;
+    write_private(&p, token)
+}
+
+/// Writes `text` to a file only this user can read (also tightening one that already exists).
+fn write_private(p: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    std::fs::write(&p, token).with_context(|| format!("writing {}", p.display()))
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(p)
+        .with_context(|| format!("creating {}", p.display()))?;
+    // `mode` only applies to a new file: restrict an existing one before anything is written.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600)).with_context(|| format!("restricting who can read {}", p.display()))?;
+    file.write_all(text.as_bytes()).with_context(|| format!("writing {}", p.display()))
 }
 
 /// Opens a screen-share session. `remember`: reuse the last choice instead of asking. The new
@@ -237,5 +253,26 @@ pub fn visible_nodes(p: &PortalStream) -> String {
         Err(e) => format!("can't check: {e}"),
         Ok(list) if list.is_empty() => "nothing".into(),
         Ok(list) => list.iter().map(|n| format!("{} [{}; id {}; serial {}]", n.name, n.class, n.id, n.serial)).collect::<Vec<_>>().join(", "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// The token lets the screen be shared again without asking: for this user only.
+    #[test]
+    fn the_token_file_is_private() {
+        let dir = std::env::temp_dir().join(format!("streamroom-token-test-{}", std::process::id()));
+        let p = dir.join("state").join("screencast-token");
+        let mode = || std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        super::write_private(&p, "first").unwrap();
+        assert_eq!(mode(), 0o600);
+        // A file from an older version, readable by everyone, is tightened too.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::write_private(&p, "second").unwrap();
+        assert_eq!(mode(), 0o600);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "second");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -18,7 +18,7 @@ use gstreamer_app as gst_app;
 
 use super::encoder::Encoder;
 use super::gate::FrameGate;
-use super::launch::{available, launch, next_error, Pipeline, PipelineError};
+use super::launch::{available, launch, next_error, play, Pipeline, PipelineError};
 use super::portal;
 use super::record;
 use crate::{Control, EncodedFrame, VideoInfo, VideoOptions};
@@ -214,13 +214,7 @@ fn try_start(text: &str, fps: u32, control: &Arc<Control>) -> Result<Running> {
     let src = pipeline.by_name("src").ok_or_else(|| anyhow!("the video pipeline has no screen source"))?;
     count_frames(&src, control, |s| &s.captured).context("counting captured frames")?;
     let bus = pipeline.bus().ok_or_else(|| anyhow!("the video pipeline has no message bus"))?;
-    if pipeline.set_state(gst::State::Playing).is_err() {
-        // The real reason is on the bus: which element refused, and why.
-        let Some(why) = next_error(&bus, gst::ClockTime::from_seconds(1)) else {
-            bail!("starting the video pipeline: an element refused to start (no details)");
-        };
-        return Err(anyhow::Error::new(why).context("starting the video pipeline"));
-    }
+    play(&pipeline).context("starting the video pipeline")?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(why) = next_error(&bus, gst::ClockTime::ZERO) {
