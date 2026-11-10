@@ -4,6 +4,7 @@
 //!                       [--no-audio] [--no-cursor] [--record] [--test-pattern] [--list-monitors]
 
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -110,7 +111,7 @@ async fn run() -> Result<()> {
     // New links carry a single-use sign-in code: sign in for this run only, sign out at the end.
     let mut signed_in: Option<Api> = None;
     let (session, info) = match launch {
-        Launch::Legacy(link) => Session::start(&link, &settings, source).await?,
+        Launch::Legacy(link) => Session::start(&link, &settings, source, Arc::default()).await?,
         Launch::Open { server, room, pair } => {
             let code = pair.ok_or_else(|| anyhow::anyhow!("that link has no sign-in code. Use Go Live → Copy a link for the app."))?;
             let room = room.ok_or_else(|| anyhow::anyhow!("that link doesn't name a room"))?;
@@ -118,7 +119,7 @@ async fn run() -> Result<()> {
             let api = Api::for_account(&account)?;
             let joined = api.app_token(&room).await?;
             signed_in = Some(api);
-            Session::start_joined(&server, joined, &settings, source).await?
+            Session::start_joined(&server, joined, &settings, source, Arc::default()).await?
         }
     };
     println!("live in \"{}\"", info.room_title);
@@ -146,7 +147,7 @@ async fn run() -> Result<()> {
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
         if let Some(r) = session.ended() {
-            break r;
+            break r.to_string();
         }
         let s = session.stats();
         print!(

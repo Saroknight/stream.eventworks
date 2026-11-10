@@ -147,6 +147,41 @@ pub struct Stats {
     pub recording: Recording,
 }
 
+/// Why a session ended on its own. The text is what the app shows.
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+pub enum Ended {
+    #[error("The room was ended.")]
+    RoomEnded,
+    #[error("You were removed from the room.")]
+    Removed,
+    /// The connection to the media server was lost; the server's reason, for the log.
+    #[error("Disconnected from the server ({0}).")]
+    Disconnected(String),
+    #[error("Screen capture stopped: {0}")]
+    CaptureStopped(String),
+    #[error("Streaming stopped.")]
+    Stopped,
+}
+
+/// Going live was stopped before it finished (see [`unless_stopped`]).
+#[derive(Debug, thiserror::Error)]
+#[error("Going live was cancelled.")]
+pub struct Cancelled;
+
+/// Runs `work`, giving up with [`Cancelled`] as soon as `control` is stopped. For the waits on
+/// the way to going live (the server, the media server), so Stop works during them.
+pub async fn unless_stopped<T>(control: &Control, work: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    let stopped = async {
+        while !control.stop.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    tokio::select! {
+        done = work => done,
+        () = stopped => Err(Cancelled.into()),
+    }
+}
+
 struct Meter {
     at: Instant,
     started: Instant,
@@ -156,7 +191,7 @@ struct Meter {
 pub struct Session {
     control: Arc<Control>,
     room: Room,
-    ended: Arc<Mutex<Option<String>>>,
+    ended: Arc<Mutex<Option<Ended>>>,
     threads: Vec<JoinHandle<()>>,
     events: tokio::task::JoinHandle<()>,
     meter: Mutex<Meter>,
@@ -168,22 +203,34 @@ pub struct Session {
 
 impl Session {
     /// Older flow: an app link with a 12-hour ticket (still accepted by the server).
-    pub async fn start(link: &AppLink, settings: &Settings, source: Source) -> Result<(Session, LiveInfo)> {
+    /// `control`: see [`Session::start_joined`].
+    pub async fn start(link: &AppLink, settings: &Settings, source: Source, control: Arc<Control>) -> Result<(Session, LiveInfo)> {
         info!("connecting to {} (room {})", link.base, link.room_id);
-        let joined = link::fetch_token(link).await?;
-        Self::start_joined(&link.base, joined, settings, source).await
+        let joined = unless_stopped(&control, link::fetch_token(link)).await?;
+        Self::start_joined(&link.base, joined, settings, source, control).await
     }
 
     /// Start streaming with a LiveKit pass already in hand (e.g. from [`Api::app_token`]).
-    pub async fn start_joined(server: &str, joined: Joined, settings: &Settings, source: Source) -> Result<(Session, LiveInfo)> {
+    /// `control`: a new one, which becomes the session's. Setting its `stop` while this runs
+    /// cancels going live: this then returns within a moment, usually with an error (if it had
+    /// just finished, with the session, for the caller to stop).
+    pub async fn start_joined(
+        server: &str,
+        joined: Joined,
+        settings: &Settings,
+        source: Source,
+        control: Arc<Control>,
+    ) -> Result<(Session, LiveInfo)> {
         let mut room_options = RoomOptions::default();
         room_options.auto_subscribe = false;
-        let (room, mut events) = Room::connect(&joined.livekit_url, &joined.token, room_options)
-            .await
-            .with_context(|| format!("could not connect to the media server at {}", joined.livekit_url))?;
+        let connecting = async {
+            Room::connect(&joined.livekit_url, &joined.token, room_options)
+                .await
+                .with_context(|| format!("could not connect to the media server at {}", joined.livekit_url))
+        };
+        let (room, mut events) = unless_stopped(&control, connecting).await?;
         info!("connected to \"{}\" via {}", joined.title, joined.livekit_url);
 
-        let control = Arc::new(Control::default());
         let result = Self::publish(&room, &control, settings, source).await;
         let ((video, audio, has_audio), threads) = match result {
             Ok(r) => r,
@@ -197,16 +244,16 @@ impl Session {
         };
 
         // Watch for the room ending or us being removed.
-        let ended = Arc::new(Mutex::new(None::<String>));
+        let ended = Arc::new(Mutex::new(None::<Ended>));
         let (ended2, control2) = (ended.clone(), control.clone());
         let events = tokio::spawn(async move {
             while let Some(ev) = events.recv().await {
                 if let RoomEvent::Disconnected { reason } = ev {
                     let msg = match reason {
-                        livekit::DisconnectReason::RoomDeleted => "The room was ended.".to_string(),
-                        livekit::DisconnectReason::ParticipantRemoved => "You were removed from the room.".to_string(),
+                        livekit::DisconnectReason::RoomDeleted => Ended::RoomEnded,
+                        livekit::DisconnectReason::ParticipantRemoved => Ended::Removed,
                         livekit::DisconnectReason::ClientInitiated => return,
-                        other => format!("Disconnected from the server ({other:?})."),
+                        other => Ended::Disconnected(format!("{other:?}")),
                     };
                     *ended2.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg);
                     control2.stop.store(true, Ordering::Relaxed);
@@ -286,7 +333,12 @@ impl Session {
         let bitrate = settings.bitrate_bps();
         let (frame_tx, frame_rx) = mpsc::sync_channel::<wincap::EncodedFrame>(8);
         let (info, video_thread) = match source {
-            Source::Screen => wincap::start_video(settings.video_options(), control.clone(), frame_tx)?,
+            // Off the async runtime: this can wait minutes for the desktop's "choose a screen"
+            // dialog (Linux), and then tries encoders until one works.
+            Source::Screen => {
+                let (options, control) = (settings.video_options(), control.clone());
+                tokio::task::spawn_blocking(move || wincap::start_video(options, control, frame_tx)).await.context("starting screen capture")??
+            }
             Source::TestPattern => start_test_pattern(control.clone(), frame_tx)?,
         };
         let mut threads = vec![video_thread];
@@ -346,7 +398,10 @@ impl Session {
         }
         if let Some(mode) = mode {
             let (audio_tx, audio_rx) = mpsc::sync_channel::<wincap::AudioChunk>(50);
-            match wincap::start_audio(control.clone(), audio_tx, mode) {
+            let capture_control = control.clone();
+            let started =
+                tokio::task::spawn_blocking(move || wincap::start_audio(capture_control, audio_tx, mode)).await.context("starting sound capture")?;
+            match started {
                 Ok((handle, what)) => {
                     threads.push(handle);
                     audio = what;
@@ -431,17 +486,17 @@ impl Session {
     }
 
     /// Why the session ended on its own (room ended, removed, capture failed), if it did.
-    pub fn ended(&self) -> Option<String> {
+    pub fn ended(&self) -> Option<Ended> {
         if let Some(m) = self.ended.lock().unwrap_or_else(PoisonError::into_inner).clone() {
             return Some(m);
         }
         if let Some(why) = self.control.stopped_reason() {
-            let msg = format!("Screen capture stopped: {why}");
+            let msg = Ended::CaptureStopped(why);
             *self.ended.lock().unwrap_or_else(PoisonError::into_inner) = Some(msg.clone());
             return Some(msg);
         }
         if self.control.stop.load(Ordering::Relaxed) {
-            return Some("Streaming stopped.".into());
+            return Some(Ended::Stopped);
         }
         None
     }
@@ -537,7 +592,36 @@ pub fn capture_test(settings: &Settings, seconds: u64) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioChoice, Settings};
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use super::{unless_stopped, AudioChoice, Cancelled, Control, Ended, Settings};
+
+    /// The app decides things by the kind of ending now, but shows the same words as before.
+    #[test]
+    fn endings_read_as_they_always_did() {
+        assert_eq!(Ended::RoomEnded.to_string(), "The room was ended.");
+        assert_eq!(Ended::Removed.to_string(), "You were removed from the room.");
+        assert_eq!(Ended::Disconnected("SignalClose".into()).to_string(), "Disconnected from the server (SignalClose).");
+        assert_eq!(Ended::CaptureStopped("the screen share ended".into()).to_string(), "Screen capture stopped: the screen share ended");
+        assert_eq!(Ended::Stopped.to_string(), "Streaming stopped.");
+    }
+
+    /// Stop has to work while going live waits on a server that doesn't answer.
+    #[tokio::test]
+    async fn a_wait_on_the_way_to_going_live_ends_when_stopped() {
+        let control = Control::default();
+        let started = Instant::now();
+        let never = std::future::pending::<anyhow::Result<()>>();
+        let (waited, ()) = tokio::join!(unless_stopped(&control, never), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            control.stop.store(true, Ordering::Relaxed);
+        });
+        assert!(waited.unwrap_err().downcast_ref::<Cancelled>().is_some());
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        // And work that finishes is passed through.
+        assert_eq!(unless_stopped(&Control::default(), async { Ok(7) }).await.unwrap(), 7);
+    }
 
     #[test]
     fn audio_choice_keeps_the_saved_names() {
