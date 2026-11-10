@@ -5,9 +5,9 @@
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
@@ -99,11 +99,48 @@ pub fn open(control: Arc<Control>, cursor: bool, remember: bool) -> Result<Porta
     let stop_t = stop.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<Shared>>();
     let request = Request { cursor, remember };
-    portal_runtime()?.spawn(async move { serve(&control, &stop_t, request, &tx).await });
+    let serving = control.clone();
+    portal_runtime()?.spawn(async move { serve(&serving, &stop_t, request, &tx).await });
     // The user may take a while in the dialog.
-    let shared = rx.recv_timeout(Duration::from_secs(180)).map_err(|_| anyhow!("no screen was chosen in time"))?.context("screen sharing")?;
+    let shared = match wait_for(&rx, &control.stop, CHOICE_TIME) {
+        Ok(shared) => shared.context("screen sharing")?,
+        Err(e) => {
+            // Nobody is waiting any more: `serve` closes the session (and with it the dialog).
+            stop.store(true, Ordering::Relaxed);
+            return Err(e.into());
+        }
+    };
     let Shared { fd, node, serial, size } = shared;
     Ok(PortalStream { fd, node, serial, size, restored, stop })
+}
+
+/// How long the desktop's dialog may stay open.
+const CHOICE_TIME: Duration = Duration::from_secs(180);
+
+/// Why waiting for the desktop's dialog ended without a screen.
+#[derive(Debug, PartialEq, thiserror::Error)]
+enum NoChoice {
+    #[error("going live was cancelled")]
+    Cancelled,
+    #[error("no screen was chosen in time")]
+    TimedOut,
+}
+
+/// Waits for the answer on `rx`: up to `limit`, or until `stop` is set (checked a few times a
+/// second, so Stop and Quit work while the desktop's dialog is open).
+fn wait_for<T>(rx: &Receiver<T>, stop: &AtomicBool, limit: Duration) -> std::result::Result<T, NoChoice> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err(NoChoice::Cancelled);
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(answer) => return Ok(answer),
+            Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+            // The sender going away without an answer: nothing will ever come.
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return Err(NoChoice::TimedOut),
+        }
+    }
 }
 
 /// The runtime all portal work runs on, started once and kept for the life of the app. ashpd
@@ -149,11 +186,22 @@ async fn serve(control: &Control, stop: &AtomicBool, request: Request, tx: &Send
             return;
         }
     };
-    let result = share(&proxy, &session, request, control).await;
-    let shared = result.is_ok();
-    if deliver(control, tx, result) && shared {
+    let stopped = async {
         while !control.stop.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    };
+    tokio::pin!(stopped);
+    // Stopped while the dialog is open (cancelled, or `open` gave up waiting): don't wait for
+    // an answer nobody wants; closing the session below takes the dialog away.
+    let result = tokio::select! {
+        result = share(&proxy, &session, request, control) => Some(result),
+        () = &mut stopped => None,
+    };
+    if let Some(result) = result {
+        let shared = result.is_ok();
+        if deliver(control, tx, result) && shared {
+            stopped.await;
         }
     }
     if let Err(e) = session.close().await {
@@ -259,6 +307,37 @@ pub fn visible_nodes(p: &PortalStream) -> String {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use super::{wait_for, NoChoice};
+
+    /// Stop and Quit have to work while the desktop's "choose a screen" dialog is open: the
+    /// wait used to be one 3-minute block.
+    #[test]
+    fn waiting_for_the_dialog_ends_when_stopped() {
+        let (_tx, rx) = std::sync::mpsc::channel::<()>(); // a dialog nobody answers
+        let stop = AtomicBool::new(false);
+        let started = Instant::now();
+        let waited = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(150));
+                stop.store(true, Ordering::Relaxed);
+            });
+            wait_for(&rx, &stop, Duration::from_secs(60))
+        });
+        assert_eq!(waited, Err(NoChoice::Cancelled));
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn waiting_for_the_dialog_gives_the_answer_or_times_out() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stop = AtomicBool::new(false);
+        assert_eq!(wait_for(&rx, &stop, Duration::from_millis(150)), Err(NoChoice::TimedOut));
+        tx.send(7).unwrap();
+        assert_eq!(wait_for(&rx, &stop, Duration::from_secs(60)), Ok(7));
+    }
 
     /// The token lets the screen be shared again without asking: for this user only.
     #[test]

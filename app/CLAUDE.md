@@ -58,6 +58,11 @@ Sound modes: everything except Discord (default), only certain apps, all PC audi
 - A link for a server this PC isn't signed in to (new sign-in code or older `#k=` link) waits
   for a yes in the window before anything is sent there (`link_action` in `core/src/api.rs`):
   any web page can open a `streamroom://` link. Plain `http://` servers only on this computer.
+- Going live can be cancelled (Cancel in the window, Stop/Quit in the tray): `begin` in
+  `desktop/src/main.rs` leaves the session-to-be's `Control` in `AppState::starting`, `end` sets
+  its `stop`, and every wait on the way checks it (`unless_stopped` in core for the servers;
+  on Linux the portal wait and the first-frame wait). Screen and sound capture start in
+  `spawn_blocking`.
 - Tray app, single instance; a second `streamroom://` link is handed to the running instance
   (with 10-second de-duplication; links are redacted in logs).
 - After pairing, the app lists rooms, creates/ends rooms, goes live, opens rooms in the browser,

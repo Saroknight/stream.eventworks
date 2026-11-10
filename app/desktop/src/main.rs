@@ -13,14 +13,15 @@
 mod account;
 mod update;
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::Serialize;
 use streamroom_core::api::parse_launch;
 use streamroom_core::{
-    link_action, log, now_ms, Account, Api, AppLink, AudioChoice, Launch, LinkAction, LiveInfo, Monitor, Recording, Session, Settings, SignedOut,
-    Source, CAN_RECORD,
+    link_action, log, now_ms, unless_stopped, Account, Api, AppLink, AudioChoice, Control, Ended, Launch, LinkAction, LiveInfo, Monitor, Recording,
+    Session, Settings, SignedOut, Source, CAN_RECORD,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -57,6 +58,14 @@ struct AppState {
     tray_stop: Mutex<Option<MenuItem<Wry>>>,
     /// A link waiting for the user to say yes (see `launch`).
     pending: Mutex<Option<Pending>>,
+    /// Going live is in progress (see `begin`); `end` cancels it through this.
+    starting: Mutex<Option<Starting>>,
+}
+
+/// Going live in progress: the session-to-be's control, and whether `end` cancelled it.
+struct Starting {
+    control: Arc<Control>,
+    cancelled: bool,
 }
 
 /// A link for a server this PC isn't signed in to, and what the window asks about it.
@@ -189,6 +198,10 @@ async fn begin(app: AppHandle, target: Target) {
     if slot.is_some() && state.target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() == Some(&target) {
         return;
     }
+    // From here until the start is over, `end` (Stop, Quit, Cancel) can cancel it: going live
+    // can sit for minutes in the desktop's "choose a screen" dialog.
+    let control = Arc::new(Control::default());
+    *state.starting.lock().unwrap_or_else(PoisonError::into_inner) = Some(Starting { control: control.clone(), cancelled: false });
     if let Some(s) = slot.take() {
         s.stop().await;
     }
@@ -197,23 +210,30 @@ async fn begin(app: AppHandle, target: Target) {
     let started = match &target {
         Target::Legacy(link) => {
             set_status(&app, Status::Connecting { server: link.base.clone() });
-            Session::start(link, &settings, Source::Screen).await
+            Session::start(link, &settings, Source::Screen, control.clone()).await
         }
         Target::Room(id) => match api(&app) {
-            Err(message) => {
-                set_status(&app, Status::Error { message });
-                return;
-            }
+            Err(message) => Err(anyhow::anyhow!(message)),
             Ok(api) => {
                 set_status(&app, Status::Connecting { server: api.server.clone() });
                 info!("going live in room {id} on {}", api.server);
-                match api.app_token(id).await {
-                    Ok(joined) => Session::start_joined(&api.server, joined, &settings, Source::Screen).await,
+                match unless_stopped(&control, api.app_token(id)).await {
+                    Ok(joined) => Session::start_joined(&api.server, joined, &settings, Source::Screen, control.clone()).await,
                     Err(e) => Err(e),
                 }
             }
         },
     };
+    let cancelled = state.starting.lock().unwrap_or_else(PoisonError::into_inner).take().is_some_and(|s| s.cancelled);
+    if cancelled {
+        info!("going live was cancelled");
+        // It may have got as far as live just as it was cancelled.
+        if let Ok((session, _)) = started {
+            session.stop().await;
+        }
+        // `end` is waiting for the session and sets what the window shows.
+        return;
+    }
     match started {
         Ok((session, info)) => {
             *slot = Some(session);
@@ -232,6 +252,11 @@ async fn begin(app: AppHandle, target: Target) {
 
 async fn end(app: &AppHandle, reason: Option<String>) {
     let state = app.state::<AppState>();
+    // Still going live: cancel that, so `begin` lets go of the session within a moment.
+    if let Some(starting) = state.starting.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+        starting.cancelled = true;
+        starting.control.stop.store(true, Ordering::Relaxed);
+    }
     let mut slot = state.session.lock().await;
     if let Some(s) = slot.take() {
         s.stop().await;
@@ -639,6 +664,7 @@ fn main() {
             update: Mutex::new(None),
             tray_stop: Mutex::new(None),
             pending: Mutex::new(None),
+            starting: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -743,16 +769,16 @@ fn main() {
                     };
                     if let Some(reason) = ended {
                         info!("session ended: {reason}");
-                        if reason.starts_with("Disconnected") {
+                        if matches!(reason, Ended::Disconnected(_)) {
                             let room = match h.state::<AppState>().target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
                                 Some(Target::Room(id)) => Some(id.clone()),
                                 _ => None,
                             };
                             if let Ok(api) = api(&h) {
-                                api.report("dropped", &reason, room.as_deref()).await;
+                                api.report("dropped", &reason.to_string(), room.as_deref()).await;
                             }
                         }
-                        end(&h, Some(reason)).await;
+                        end(&h, Some(reason.to_string())).await;
                         show_main(&h);
                     }
                 }

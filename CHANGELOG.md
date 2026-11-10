@@ -2,6 +2,12 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Windows 0.4.7 / Linux 0.4.21: going live can be cancelled. The Connecting view has a Cancel
+   button, and Stop and Quit in the tray work while connecting, including while the desktop's
+   "choose a screen" dialog is open on Linux (they used to hang until it was answered, up to 3
+   minutes; the dialog is closed with it). Starting capture no longer blocks the app's
+   background work. The app tells a lost connection from other endings by type, not by the
+   message text (same messages).
 - Linux 0.4.20: working sound is no longer restarted (or paused for 30 s) when one check of
    which apps are playing fails; a sound pipeline that won't start now says which part refused
    and why; the remembered-screen token is readable by this user only; the package now requires

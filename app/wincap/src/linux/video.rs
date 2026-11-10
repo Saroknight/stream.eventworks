@@ -223,6 +223,9 @@ fn try_start(text: &str, fps: u32, control: &Arc<Control>) -> Result<Running> {
         if let Some(first) = sink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
             return Ok(Running { pipeline, sink, enc, first });
         }
+        if control.stop.load(Ordering::Relaxed) {
+            bail!("going live was cancelled");
+        }
         if Instant::now() > deadline {
             bail!("no video came through in 10 seconds");
         }
@@ -245,6 +248,10 @@ fn start_encoders(screen: &Screen, opts: &VideoOptions, control: &Arc<Control>) 
         // to the next way (for this and the following encoders).
         // `targets` always ends with "no target", and `t` only moves on while there's another.
         while let Some(target) = targets.get(t) {
+            // Cancelled: don't work through the other encoders.
+            if control.stop.load(Ordering::Relaxed) {
+                return Err(tried);
+            }
             match try_start(&pipeline_text(screen, target, encoder, opts), opts.fps, control) {
                 Ok(run) => return Ok(Started { run, encoder, target: target.clone(), tried }),
                 Err(e) => {
@@ -311,6 +318,11 @@ fn failure_detail(screen: &Screen) -> String {
 fn start_screen(opts: &VideoOptions, control: &Arc<Control>) -> Result<(Screen, Started)> {
     let mut screen = open_screen(control, opts, opts.monitor != ASK_EVERY_TIME)?;
     let mut result = start_encoders(&screen, opts, control);
+    // Before the fallback below: a cancelled start mustn't forget the remembered screen and ask
+    // again.
+    if control.stop.load(Ordering::Relaxed) {
+        bail!("going live was cancelled");
+    }
     if let Err(first) = &result {
         if matches!(&screen, Screen::Portal(p) if p.restored) {
             let first = first.join("; ");

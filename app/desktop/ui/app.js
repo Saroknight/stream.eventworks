@@ -216,6 +216,10 @@ $('stopBtn').onclick = async () => {
   $('stopBtn').disabled = true;
   try { await invoke('stop'); } finally { $('stopBtn').disabled = false; }
 };
+$('cancelBtn').onclick = async () => {
+  $('cancelBtn').disabled = true;
+  try { await invoke('stop'); } finally { $('cancelBtn').disabled = false; }
+};
 $('watchBtn').onclick = () => call('open_room', { room: snap.room });
 confirmButton($('endRoomBtn'), 'Sure? Ends it for everyone', () => call('end_room', { room: snap.room }));
 
