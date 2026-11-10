@@ -73,7 +73,12 @@ function render() {
   // The paste box is the fallback for signing in; keep it out of the way once signed in.
   $('pasteBox').classList.toggle('hidden', signedIn && st.kind !== 'error');
 
-  if (st.kind === 'idle') {
+  if (snap.confirm) {
+    showState('confirm');
+    $('confirmTitle').textContent = `Sign in to ${snap.confirm.host}?`;
+    $('confirmSignsOut').textContent = snap.confirm.signs_out_of ? `You'll be signed out of ${snap.confirm.signs_out_of}.` : '';
+    $('confirmSignsOut').classList.toggle('hidden', !snap.confirm.signs_out_of);
+  } else if (st.kind === 'idle') {
     showState(signedIn ? 'idle' : 'signin');
   } else if (st.kind === 'connecting') {
     showState('connecting');
@@ -332,6 +337,11 @@ $('checkUpdateBtn').onclick = async () => {
 };
 confirmButton($('signOutBtn'), 'Click again to sign out', async () => { await call('sign_out'); rooms = []; renderRooms(); });
 
+// ---------- a link for another server ----------
+const answerLink = (accept) => call('confirm_link', { accept }).catch(() => {});
+$('confirmYesBtn').onclick = () => answerLink(true);
+$('confirmNoBtn').onclick = () => answerLink(false);
+
 // ---------- other actions ----------
 $('okBtn').onclick = () => invoke('dismiss');
 $('retryBtn').onclick = () => call('restart').catch(() => {});
@@ -366,6 +376,7 @@ $('diagBtn').onclick = async () => {
     render();
     refreshRooms();
   });
+  await listen('confirm', (e) => { snap.confirm = e.payload; render(); });
   await listen('account', (e) => { snap.account = e.payload; render(); refreshRooms(); });
   await listen('stats', (e) => renderStats(e.payload));
   await listen('update', (e) => { snap.update = e.payload; renderUpdate(); });

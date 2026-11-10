@@ -2,6 +2,14 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Windows 0.4.6 / Linux 0.4.19: security fixes. A link for a server this PC isn't signed in to
+   now asks first ("Sign in to <host>?") instead of signing in and going live there on its own
+   (any web page can open a `streamroom://` link); plain `http://` servers are only accepted on
+   this computer. *Only certain apps* with no app ticked shares no sound (it shared all PC
+   audio, Discord included). Linux: the update is downloaded to a private folder instead of the
+   shared temp folder before it's installed; the console tool's log moved from the temp folder
+   to `~/.local/state/streamroom-live/`. Frame rate and height from the settings file are held
+   to sane values.
 - Linux 0.4.18: fixed sound going silent when another app had a paused or finished video
    (browsers keep an idle sound stream open, and one idle stream stopped all sound capture,
    game included). Only playing streams are captured now.
