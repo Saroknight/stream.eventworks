@@ -16,6 +16,8 @@ depends=(
   'gst-plugin-va'         # AMD/Intel hardware encoding (VA-API)
   'gst-plugins-ugly'      # x264: software fallback so video always works
   'pipewire' 'xdg-desktop-portal' 'polkit'
+  'pipewire-pulse'        # "all PC audio" (the default output's monitor)
+  'xdg-utils'             # xdg-open: Watch in browser, the site, the log folder
 )
 optdepends=(
   'gst-plugins-bad: NVIDIA hardware encoding (NVENC)'

@@ -21,7 +21,7 @@ use gstreamer_app as gst_app;
 use tracing::{info, warn};
 
 use super::audio::{CHANNELS, CHUNK, RATE};
-use super::launch::next_error;
+use super::launch::{next_error, play, PipelineError};
 use crate::{Control, Recording};
 
 /// Silence filled in per step while no sound arrives: one chunk (`CHUNK` samples).
@@ -207,9 +207,9 @@ impl Recorder {
         let audio = if with_audio { Some(app_src(&pipeline, "a")?) } else { None };
         // From here on, Drop sets the pipeline back to Null however this ends.
         let r = Recorder { pipeline, video, audio, path, start: Instant::now(), state: Mutex::new(State::default()) };
-        if r.pipeline.set_state(gst::State::Playing).is_err() {
-            let why = r.pipeline.bus().and_then(|b| next_error(&b, gst::ClockTime::from_seconds(1))).map(|e| e.message);
-            bail!("couldn't start writing {}: {}", r.path.display(), why.as_deref().unwrap_or("no details"));
+        if let Err(e) = play(&r.pipeline) {
+            let why = e.downcast_ref::<PipelineError>().map_or("no details", |e| e.message.as_str());
+            bail!("couldn't start writing {}: {why}", r.path.display());
         }
         Ok(r)
     }
