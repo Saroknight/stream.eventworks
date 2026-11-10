@@ -2,6 +2,10 @@
 
 Newest first. Windows releases are tagged `app-vX.Y.Z`, Linux releases `linux-vX.Y.Z`.
 
+- Windows 0.4.8 / Linux 0.4.22: tidy-up, nothing to notice. The app keeps one connection to
+   the server instead of opening a new one for every request (the room list refreshes every 4
+   seconds); unused code removed (`wait_until`, `Api::me`); comments that still said
+   Windows-only corrected.
 - Windows 0.4.7 / Linux 0.4.21: going live can be cancelled. The Connecting view has a Cancel
    button, and Stop and Quit in the tray work while connecting, including while the desktop's
    "choose a screen" dialog is open on Linux (they used to hang until it was answered, up to 3

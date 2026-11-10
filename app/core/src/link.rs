@@ -83,11 +83,7 @@ pub struct Joined {
 }
 
 pub async fn fetch_token(link: &AppLink) -> Result<Joined> {
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("streamroom-live/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(20))
-        .build()?;
-    let resp = client
+    let resp = crate::http_client()?
         .post(format!("{}/api/token", link.base))
         .json(&serde_json::json!({
             "roomId": link.room_id,

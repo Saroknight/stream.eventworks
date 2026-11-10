@@ -219,7 +219,7 @@ pub fn start_video(
     _control: std::sync::Arc<Control>,
     _tx: std::sync::mpsc::SyncSender<EncodedFrame>,
 ) -> anyhow::Result<(VideoInfo, std::thread::JoinHandle<()>)> {
-    anyhow::bail!("screen capture is only available on Windows")
+    anyhow::bail!("screen capture is only available on Windows and Linux")
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -228,7 +228,7 @@ pub fn start_audio(
     _tx: std::sync::mpsc::SyncSender<AudioChunk>,
     _mode: AudioMode,
 ) -> anyhow::Result<(std::thread::JoinHandle<()>, String)> {
-    anyhow::bail!("audio capture is only available on Windows")
+    anyhow::bail!("audio capture is only available on Windows and Linux")
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]

@@ -2,7 +2,7 @@
 name = "wincap"
 version.workspace = true
 edition.workspace = true
-description = "Windows screen capture (DXGI Desktop Duplication), GPU color conversion and Media Foundation hardware H.264 encoding"
+description = "Screen and sound capture with hardware H.264 encoding: Windows (DXGI, Media Foundation, WASAPI) and Linux (portal or X11, GStreamer, PipeWire)"
 
 [dependencies]
 anyhow = "1"

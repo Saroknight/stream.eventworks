@@ -52,10 +52,7 @@ struct Asset {
 }
 
 fn client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .user_agent(concat!("streamroom-live/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(300))
-        .build()?)
+    Ok(reqwest::Client::builder().user_agent(streamroom_core::USER_AGENT).timeout(std::time::Duration::from_secs(300)).build()?)
 }
 
 /// "0.10.2" > "0.9.9", ignoring a leading tag prefix ("app-v", "linux-v", "v").

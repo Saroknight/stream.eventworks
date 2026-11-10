@@ -1,8 +1,8 @@
 //! Streamroom Live engine, shared by the desktop app and the console tool.
 //!
-//! A [`Session`] fetches a LiveKit token with an app link, captures the screen on the GPU
-//! (wincap: DXGI Desktop Duplication -> hardware H.264), publishes the already-encoded video
-//! plus PC audio, and reports stats. Stopping it, or the room ending, tears everything down.
+//! A [`Session`] takes a LiveKit pass, captures the screen and encodes it on the graphics card
+//! where it can (wincap: Windows and Linux), publishes the already-encoded video plus PC audio,
+//! and reports stats. Stopping it, or the room ending, tears everything down.
 
 pub mod api;
 pub mod link;
@@ -31,6 +31,14 @@ use tracing::{error, info, warn};
 pub use api::{link_action, Account, Api, Launch, LinkAction, SignedOut};
 pub use link::{AppLink, Joined};
 pub use wincap::{audio_apps, list_monitors, screen_dialog, AudioMode, Control, Monitor, Recording, VideoInfo, CAN_RECORD};
+
+/// How the app names itself to the servers it talks to.
+pub const USER_AGENT: &str = concat!("streamroom-live/", env!("CARGO_PKG_VERSION"));
+
+/// The HTTP client for the Streamroom server.
+pub(crate) fn http_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(20)).build()?)
+}
 
 /// Call once at startup. Two TLS backends end up compiled in through different dependencies;
 /// without picking one, the first secure (wss://) connection panics.
@@ -539,18 +547,6 @@ fn start_test_pattern(_control: Arc<Control>, _tx: mpsc::SyncSender<wincap::Enco
 /// Milliseconds since the Unix epoch (for "live since" in UIs).
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
-
-/// Waits up to `timeout` for `f` to return true. Small helper for callers polling sessions.
-pub async fn wait_until(timeout: Duration, mut f: impl FnMut() -> bool) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if f() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    false
 }
 
 /// Captures and encodes the screen for a few seconds without any server, and reports what
