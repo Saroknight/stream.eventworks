@@ -92,8 +92,8 @@ struct AccountView {
     host: String,
 }
 
-fn account_view(a: &Option<Account>) -> Option<AccountView> {
-    a.as_ref().map(|a| AccountView {
+fn account_view(a: Option<&Account>) -> Option<AccountView> {
+    a.map(|a| AccountView {
         name: a.user_name.clone(),
         server: a.server.clone(),
         host: a.server.split("://").nth(1).unwrap_or(&a.server).to_string(),
@@ -144,7 +144,7 @@ fn set_status(app: &AppHandle, status: Status) {
     let tip = match &status {
         Status::Live { info, .. } => format!("Streamroom Live: live in {}", info.room_title),
         Status::Connecting { .. } => "Streamroom Live: connecting…".into(),
-        _ => "Streamroom Live".into(),
+        Status::Idle | Status::Ended { .. } | Status::Error { .. } => "Streamroom Live".into(),
     };
     *lock(&state.status) = status.clone();
     if let Some(item) = lock(&state.tray_stop).as_ref() {
@@ -187,7 +187,7 @@ fn set_account(app: &AppHandle, a: Option<Account>) {
     }
     // Made again for the new sign-in on its next use.
     *lock(&app.state::<AppState>().api) = None;
-    let view = account_view(&a);
+    let view = account_view(a.as_ref());
     *lock(&app.state::<AppState>().account) = a;
     let _ = app.emit("account", view);
 }
@@ -297,7 +297,7 @@ async fn end(app: &AppHandle, reason: Option<String>) {
 /// isn't signed in to waits for a yes in the window before anything is sent there.
 async fn launch(app: AppHandle, l: Launch) -> Result<(), String> {
     show_main(&app);
-    let current = account_view(&current_account(&app));
+    let current = account_view(current_account(&app).as_ref());
     match link_action(current.as_ref().map(|a| a.server.as_str()), &l) {
         LinkAction::Proceed => follow(app, l).await,
         LinkAction::Confirm { host } => {
@@ -449,7 +449,7 @@ fn load_settings(app: &AppHandle) -> Settings {
 fn get_state(state: State<'_, AppState>) -> Snapshot {
     Snapshot {
         status: lock(&state.status).clone(),
-        account: account_view(&lock(&state.account)),
+        account: account_view(lock(&state.account).as_ref()),
         room: target_room(&state),
         settings: lock(&state.settings).clone(),
         monitors: streamroom_core::list_monitors(),
@@ -661,6 +661,74 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 
 // ---------- app ----------
 
+/// Tray: keeps streaming visible (and stoppable) with the window closed.
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Show Streamroom Live", true, None::<&str>)?;
+    let stop_item = MenuItem::with_id(app, "stop", "Stop streaming", false, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &stop_item, &quit])?;
+    *lock(&app.state::<AppState>().tray_stop) = Some(stop_item);
+    let mut tray = TrayIconBuilder::with_id("main").tooltip("Streamroom Live").menu(&menu).show_menu_on_left_click(false);
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.on_menu_event(|app, event| match event.id().0.as_str() {
+        "show" => show_main(app),
+        "stop" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { end(&app, None).await });
+        }
+        "quit" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                end(&app, None).await;
+                app.exit(0);
+            });
+        }
+        _ => {}
+    })
+    .on_tray_icon_event(|tray, event| {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            show_main(tray.app_handle());
+        }
+    })
+    .build(app)?;
+    Ok(())
+}
+
+/// Once a second while live: stats to the window, and notice if the session ended
+/// on its own (room ended, removed, capture failed).
+async fn watch_session(h: AppHandle) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let ended = {
+            let state = h.state::<AppState>();
+            let Ok(slot) = state.session.try_lock() else { continue };
+            match slot.as_ref() {
+                Some(s) => match s.ended() {
+                    Some(reason) => Some(reason),
+                    None => {
+                        let _ = h.emit("stats", s.stats());
+                        None
+                    }
+                },
+                None => None,
+            }
+        };
+        if let Some(reason) = ended {
+            info!("session ended: {reason}");
+            if matches!(reason, Ended::Disconnected(_)) {
+                let room = target_room(&h.state::<AppState>());
+                if let Ok(api) = api(&h) {
+                    api.report("dropped", &reason.to_string(), room.as_deref()).await;
+                }
+            }
+            end(&h, Some(reason.to_string())).await;
+            show_main(&h);
+        }
+    }
+}
+
 fn main() {
     streamroom_core::init();
     tauri::Builder::default()
@@ -735,71 +803,9 @@ fn main() {
                 _ => handle_links(&handle, std::env::args().skip(1)),
             }
 
-            // Tray: keeps streaming visible (and stoppable) with the window closed.
-            let show = MenuItem::with_id(app, "show", "Show Streamroom Live", true, None::<&str>)?;
-            let stop_item = MenuItem::with_id(app, "stop", "Stop streaming", false, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &stop_item, &quit])?;
-            *lock(&app.state::<AppState>().tray_stop) = Some(stop_item);
-            let mut tray = TrayIconBuilder::with_id("main").tooltip("Streamroom Live").menu(&menu).show_menu_on_left_click(false);
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
-            }
-            tray.on_menu_event(|app, event| match event.id().0.as_str() {
-                "show" => show_main(app),
-                "stop" => {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move { end(&app, None).await });
-                }
-                "quit" => {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        end(&app, None).await;
-                        app.exit(0);
-                    });
-                }
-                _ => {}
-            })
-            .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                    show_main(tray.app_handle());
-                }
-            })
-            .build(app)?;
+            build_tray(app)?;
 
-            // Once a second while live: stats to the window, and notice if the session ended
-            // on its own (room ended, removed, capture failed).
-            let h = handle.clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    let ended = {
-                        let state = h.state::<AppState>();
-                        let Ok(slot) = state.session.try_lock() else { continue };
-                        match slot.as_ref() {
-                            Some(s) => match s.ended() {
-                                Some(reason) => Some(reason),
-                                None => {
-                                    let _ = h.emit("stats", s.stats());
-                                    None
-                                }
-                            },
-                            None => None,
-                        }
-                    };
-                    if let Some(reason) = ended {
-                        info!("session ended: {reason}");
-                        if matches!(reason, Ended::Disconnected(_)) {
-                            let room = target_room(&h.state::<AppState>());
-                            if let Ok(api) = api(&h) {
-                                api.report("dropped", &reason.to_string(), room.as_deref()).await;
-                            }
-                        }
-                        end(&h, Some(reason.to_string())).await;
-                        show_main(&h);
-                    }
-                }
-            });
+            tauri::async_runtime::spawn(watch_session(handle.clone()));
 
             // Look for updates a few seconds after start, then every 6 hours.
             let h = handle.clone();

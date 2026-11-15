@@ -257,6 +257,7 @@ impl Session {
         let events = tokio::spawn(async move {
             while let Some(ev) = events.recv().await {
                 if let RoomEvent::Disconnected { reason } = ev {
+                    #[expect(clippy::wildcard_enum_match_arm, reason = "LiveKit's enum; every other reason is reported by name")]
                     let msg = match reason {
                         livekit::DisconnectReason::RoomDeleted => Ended::RoomEnded,
                         livekit::DisconnectReason::ParticipantRemoved => Ended::Removed,
@@ -370,32 +371,7 @@ impl Session {
             .context("publishing the video track")?;
 
         // Encoded frames -> LiveKit, plus keyframe and bitrate requests back to the encoder.
-        let pump_control = control.clone();
-        threads.push(std::thread::Builder::new().name("video-pump".into()).spawn(move || {
-            let mut last_rate: u32 = 0;
-            while let Ok(f) = frame_rx.recv() {
-                let frame = EncodedVideoFrame {
-                    codec: EncodedVideoCodec::H264,
-                    payload: &f.data,
-                    timestamp_us: f.capture_unix_us,
-                    frame_type: if f.keyframe { EncodedFrameType::Key } else { EncodedFrameType::Delta },
-                    resolution: VideoResolution { width: f.width, height: f.height },
-                    frame_metadata: None,
-                };
-                video_source.capture_encoded_frame(&frame);
-                if video_source.take_keyframe_request() {
-                    pump_control.request_keyframe();
-                }
-                if let Some(rc) = video_source.take_rate_control_request() {
-                    let bps = (rc.target_bitrate_bps as u32).min(bitrate);
-                    // Only pass on meaningful changes; encoders don't like constant tweaking.
-                    if bps > 0 && (last_rate == 0 || (bps as i64 - last_rate as i64).unsigned_abs() > last_rate as u64 / 10) {
-                        last_rate = bps;
-                        pump_control.request_bitrate(bps);
-                    }
-                }
-            }
-        })?);
+        threads.push(spawn_video_pump(video_source, frame_rx, control.clone(), bitrate)?);
 
         // PC audio: everything, everything except Discord, or only chosen apps.
         let mut audio = "off".to_string();
@@ -414,49 +390,7 @@ impl Session {
                     threads.push(handle);
                     audio = what;
                     has_audio = true;
-                    let source = NativeAudioSource::new(
-                        AudioSourceOptions { echo_cancellation: false, noise_suppression: false, auto_gain_control: false },
-                        48_000,
-                        2,
-                        100,
-                    );
-                    let track = LocalAudioTrack::create_audio_track("screen-audio", RtcAudioSource::Native(source.clone()));
-                    room.local_participant()
-                        .publish_track(
-                            LocalTrack::Audio(track),
-                            TrackPublishOptions {
-                                source: TrackSource::ScreenshareAudio,
-                                dtx: false,
-                                red: false,
-                                audio_encoding: Some(AudioEncoding { max_bitrate: 128_000 }),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                        .context("publishing the audio track")?;
-                    let rt = tokio::runtime::Handle::current();
-                    threads.push(std::thread::Builder::new().name("audio-pump".into()).spawn(move || {
-                        let mut failed = 0u64;
-                        while let Ok(chunk) = audio_rx.recv() {
-                            let frames = chunk.samples.len() as u32 / chunk.channels as u32;
-                            let frame = AudioFrame {
-                                data: chunk.samples.into(),
-                                sample_rate: chunk.sample_rate,
-                                num_channels: chunk.channels as u32,
-                                samples_per_channel: frames,
-                            };
-                            if let Err(e) = rt.block_on(source.capture_frame(&frame)) {
-                                // Once, not 100 times a second.
-                                if failed == 0 {
-                                    warn!("sending sound failed: {e}");
-                                }
-                                failed += 1;
-                            }
-                        }
-                        if failed > 1 {
-                            warn!("sending sound failed {failed} times in all");
-                        }
-                    })?);
+                    threads.push(publish_audio(room, audio_rx).await?);
                 }
                 Err(e) => {
                     warn!("audio not available: {e:#}");
@@ -532,6 +466,85 @@ impl Session {
         }
         info!("stopped");
     }
+}
+
+/// Sends encoded frames to LiveKit and passes its keyframe and bitrate requests back to the
+/// encoder, until the capture side hangs up.
+fn spawn_video_pump(
+    video_source: NativeVideoSource,
+    frame_rx: mpsc::Receiver<wincap::EncodedFrame>,
+    control: Arc<Control>,
+    bitrate: u32,
+) -> std::io::Result<JoinHandle<()>> {
+    std::thread::Builder::new().name("video-pump".into()).spawn(move || {
+        let mut last_rate: u32 = 0;
+        while let Ok(f) = frame_rx.recv() {
+            let frame = EncodedVideoFrame {
+                codec: EncodedVideoCodec::H264,
+                payload: &f.data,
+                timestamp_us: f.capture_unix_us,
+                frame_type: if f.keyframe { EncodedFrameType::Key } else { EncodedFrameType::Delta },
+                resolution: VideoResolution { width: f.width, height: f.height },
+                frame_metadata: None,
+            };
+            video_source.capture_encoded_frame(&frame);
+            if video_source.take_keyframe_request() {
+                control.request_keyframe();
+            }
+            if let Some(rc) = video_source.take_rate_control_request() {
+                let bps = (rc.target_bitrate_bps as u32).min(bitrate);
+                // Only pass on meaningful changes; encoders don't like constant tweaking.
+                if bps > 0 && (last_rate == 0 || (bps as i64 - last_rate as i64).unsigned_abs() > last_rate as u64 / 10) {
+                    last_rate = bps;
+                    control.request_bitrate(bps);
+                }
+            }
+        }
+    })
+}
+
+/// Publishes the PC audio track and starts the thread that feeds it captured sound.
+async fn publish_audio(room: &Room, audio_rx: mpsc::Receiver<wincap::AudioChunk>) -> Result<JoinHandle<()>> {
+    let source =
+        NativeAudioSource::new(AudioSourceOptions { echo_cancellation: false, noise_suppression: false, auto_gain_control: false }, 48_000, 2, 100);
+    let track = LocalAudioTrack::create_audio_track("screen-audio", RtcAudioSource::Native(source.clone()));
+    room.local_participant()
+        .publish_track(
+            LocalTrack::Audio(track),
+            TrackPublishOptions {
+                source: TrackSource::ScreenshareAudio,
+                dtx: false,
+                red: false,
+                audio_encoding: Some(AudioEncoding { max_bitrate: 128_000 }),
+                ..Default::default()
+            },
+        )
+        .await
+        .context("publishing the audio track")?;
+    let rt = tokio::runtime::Handle::current();
+    let pump = std::thread::Builder::new().name("audio-pump".into()).spawn(move || {
+        let mut failed = 0u64;
+        while let Ok(chunk) = audio_rx.recv() {
+            let frames = chunk.samples.len() as u32 / chunk.channels as u32;
+            let frame = AudioFrame {
+                data: chunk.samples.into(),
+                sample_rate: chunk.sample_rate,
+                num_channels: chunk.channels as u32,
+                samples_per_channel: frames,
+            };
+            if let Err(e) = rt.block_on(source.capture_frame(&frame)) {
+                // Once, not 100 times a second.
+                if failed == 0 {
+                    warn!("sending sound failed: {e}");
+                }
+                failed += 1;
+            }
+        }
+        if failed > 1 {
+            warn!("sending sound failed {failed} times in all");
+        }
+    })?;
+    Ok(pump)
 }
 
 #[cfg(feature = "testsrc")]

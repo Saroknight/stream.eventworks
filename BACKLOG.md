@@ -13,6 +13,12 @@ Not started unless the owner picks them:
   `ActivateCompleted`), narrow the whole-function `unsafe` block to the two calls with `SAFETY`
   comments, move the condvar wait into a safe helper (removes the last two `unwrap()`s that fail
   Windows-target clippy). Own branch; needs testing on Windows.
+- Windows-target clippy for `wincap` (`cargo clippy --target x86_64-pc-windows-msvc -p wincap
+  --all-targets -- -D warnings`, works from Linux) fails the workspace lints, which Linux clippy
+  never sees: 42 unsafe blocks without `SAFETY` comments (audio, capture, convert, cursor, d3d,
+  encoder, pipeline), 3 `_ =>` arms on our own `Grab` enum and `run_inner` at 142 lines (both in
+  `pipeline.rs`), plus the two `unwrap()`s in the per-app sound item above. Windows CI only
+  builds, so this doesn't break releases. Needs a Windows build to test.
 - Port 443 relay: parked; revisit only if someone's network actually blocks the video ports.
 - Linux: confirm 0.4.7+ streams cleanly at the set fps on the tester's GNOME machine, including
   per-app sound. No Flatpak/other distros planned; Steam Deck and OBS integration explicitly out
