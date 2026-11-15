@@ -26,6 +26,7 @@ pub fn init(path: Option<PathBuf>) {
     let path = PATH.get_or_init(|| path.unwrap_or_else(default_path));
     // Nothing logs yet, so problems setting up the log can only go to the console.
     if let Some(dir) = path.parent() {
+        #[expect(clippy::print_stderr, reason = "logging isn't set up yet, so the console is the only place this can go")]
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("can't create the log folder {}: {e}", dir.display());
         }
@@ -33,12 +34,14 @@ pub fn init(path: Option<PathBuf>) {
     roll_over(path);
     let file = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
         Ok(f) => f,
+        #[expect(clippy::print_stderr, reason = "logging isn't set up yet, so the console is the only place this can go")]
         Err(e) => return eprintln!("can't open the log file {}: {e}", path.display()),
     };
     let (writer, guard) = tracing_appender::non_blocking(file);
     let layer = tracing_subscriber::fmt::layer().with_writer(writer).with_ansi(false);
     match tracing_subscriber::registry().with(layer).with(filter()).try_init() {
         Ok(()) => *GUARD.lock().unwrap_or_else(PoisonError::into_inner) = Some(guard),
+        #[expect(clippy::print_stderr, reason = "logging isn't set up yet, so the console is the only place this can go")]
         Err(e) => eprintln!("can't log to {}: {e}", path.display()),
     }
 }
@@ -52,6 +55,7 @@ fn filter() -> Targets {
 /// Keeps the file from growing forever: past [`MAX_SIZE`] it's renamed to `*.old.log`.
 fn roll_over(path: &Path) {
     if std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_SIZE) {
+        #[expect(clippy::print_stderr, reason = "logging isn't set up yet, so the console is the only place this can go")]
         if let Err(e) = std::fs::rename(path, path.with_extension("old.log")) {
             eprintln!("can't start a fresh log file {}: {e}", path.display());
         }

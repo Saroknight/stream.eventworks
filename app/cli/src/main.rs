@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use streamroom_core::api::parse_launch;
-use streamroom_core::{log, Api, Launch, Recording, Session, Settings, Source};
+use streamroom_core::{log, Api, Launch, LiveInfo, Recording, Session, Settings, Source};
 use tracing::{error, info};
 
 const HELP: &str = "Streamroom Live (console)
@@ -45,6 +45,7 @@ fn main() {
     });
     let failed = match result {
         Ok(Ok(())) => false,
+        #[expect(clippy::print_stderr, reason = "the console tool shows errors to the person running it")]
         Ok(Err(e)) => {
             eprintln!("\nError: {e:#}");
             error!("Error: {e:#}");
@@ -53,6 +54,7 @@ fn main() {
         Err(_) => true,
     };
     log::flush();
+    #[expect(clippy::print_stderr, reason = "the console tool shows errors to the person running it")]
     if failed {
         eprintln!("\nLog: {}", log::path().display());
         let _ = prompt("Press Enter to close");
@@ -122,22 +124,7 @@ async fn run() -> Result<()> {
             Session::start_joined(&server, joined, &settings, source, Arc::default()).await?
         }
     };
-    println!("live in \"{}\"", info.room_title);
-    println!("GPU:      {}", info.video.adapter);
-    println!(
-        "Capture:  {} {}x{} -> {}x{} @ {} fps",
-        info.video.capture_method, info.video.source_width, info.video.source_height, info.video.width, info.video.height, info.video.fps
-    );
-    println!("Encoder:  {} (H.264, {:.1} Mbps)", info.video.encoder, info.bitrate_mbps);
-    if !info.video.unsupported_settings.is_empty() {
-        println!("          (encoder ignored: {})", info.video.unsupported_settings.join(", "));
-    }
-    println!("Audio:    {}", info.audio);
-    match &info.recording {
-        Recording::Off => {}
-        Recording::On { path } => println!("Saving:   {path}"),
-        Recording::Failed { why, .. } => println!("Saving:   couldn't start ({why})"),
-    }
+    print_live_info(&info);
     println!("\nLIVE. Press Ctrl+C to stop.\n");
 
     let mut ticks = 0u64;
@@ -167,4 +154,24 @@ async fn run() -> Result<()> {
         let _ = api.signout().await;
     }
     Ok(())
+}
+
+/// What went live: the room, and how the screen and sound are being captured and sent.
+fn print_live_info(info: &LiveInfo) {
+    println!("live in \"{}\"", info.room_title);
+    println!("GPU:      {}", info.video.adapter);
+    println!(
+        "Capture:  {} {}x{} -> {}x{} @ {} fps",
+        info.video.capture_method, info.video.source_width, info.video.source_height, info.video.width, info.video.height, info.video.fps
+    );
+    println!("Encoder:  {} (H.264, {:.1} Mbps)", info.video.encoder, info.bitrate_mbps);
+    if !info.video.unsupported_settings.is_empty() {
+        println!("          (encoder ignored: {})", info.video.unsupported_settings.join(", "));
+    }
+    println!("Audio:    {}", info.audio);
+    match &info.recording {
+        Recording::Off => {}
+        Recording::On { path } => println!("Saving:   {path}"),
+        Recording::Failed { why, .. } => println!("Saving:   couldn't start ({why})"),
+    }
 }
